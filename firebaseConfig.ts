@@ -16,8 +16,8 @@ const firebaseConfig = {
   messagingSenderId: "1056584302761",
   appId: "1:1056584302761:web:659d6c4a3692ded2c4a9b8",
   measurementId: "G-DT7ZYWWZ8E",
-  databaseURL: "https://train-api-49052-default-rtdb.firebaseio.com"
 };
+
 
 let db: any = null;
 
