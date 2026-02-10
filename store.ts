@@ -4,7 +4,8 @@ import { subscribeWithSelector } from 'zustand/middleware';
 import { BoardState, Note, NoteColor, Stroke, TaskStatus, ToolType, Viewport, DEFAULT_JOBS } from './types';
 import { db, IS_FIREBASE } from './firebaseConfig';
 import { ref, onValue, set } from "firebase/database";
-import { GoogleGenAI } from "@google/genai";
+// Fix: Use correct GenAI imports and types
+import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 
 const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
 const STORAGE_KEY = 'ideatasks-board-v1';
@@ -206,7 +207,6 @@ export const useBoardStore = create<BoardState>()(
       jobs: data.jobs || DEFAULT_JOBS
     }),
 
-    // AI BRAINSTORM IMPLEMENTATION
     generateBrainstorm: async (noteId) => {
       const state = get();
       const note = state.notes.find(n => n.id === noteId);
@@ -215,16 +215,18 @@ export const useBoardStore = create<BoardState>()(
       setStore({ isGeneratingAI: true });
 
       try {
-        // Fix: Use process.env.API_KEY directly as required.
+        // Fix: Create instance right before call and follow naming/initialization guidelines
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
+        const response: GenerateContentResponse = await ai.models.generateContent({
+          // Fix: Use 'gemini-3-pro-preview' for complex brainstorming/reasoning tasks
+          model: 'gemini-3-pro-preview',
           contents: `Brainstorm and expand upon the following idea: "${note.content}". Provide 3 concise suggestions or related tasks.`,
           config: {
             systemInstruction: "You are a creative productivity assistant. Keep suggestions brief and actionable."
           }
         });
 
+        // Fix: Directly access the .text property (do not call it as a method)
         const aiText = response.text;
         if (aiText) {
           const updatedContent = note.content + "\n\n--- AI Brainstorm ---\n" + aiText;
@@ -241,13 +243,12 @@ export const useBoardStore = create<BoardState>()(
 
 // --- PERSISTENCE LOGIC ---
 
-// Shared lock to prevent recursive updates
 let isExternalUpdate = false;
 
 if (IS_FIREBASE && db) {
     const boardRef = ref(db, 'board_v1');
 
-    // Subscribe to Firebase changes (onSnapshot equivalent for RTDB)
+    // Subscribe to Firebase changes (onValue)
     onValue(boardRef, (snapshot) => {
         const data = snapshot.val();
         if (data) {
@@ -260,9 +261,11 @@ if (IS_FIREBASE && db) {
             });
             isExternalUpdate = false;
         }
+    }, (error) => {
+        console.error("Firebase Read Error:", error);
     });
 
-    // Debounced sync to Firebase
+    // Push local changes to Firebase
     let syncTimeout: any = null;
     useBoardStore.subscribe(
         (state) => ({ 
@@ -276,15 +279,12 @@ if (IS_FIREBASE && db) {
             if (syncTimeout) clearTimeout(syncTimeout);
             
             syncTimeout = setTimeout(() => {
-                set(boardRef, data).catch((err) => {
-                  if (err.message.includes("Requested entity was not found")) {
-                    console.warn("Firebase path missing, initializing...");
-                    set(boardRef, data);
-                  } else {
-                    console.error("Firebase sync error:", err);
-                  }
-                });
-            }, 1000); // 1 second debounce for stability
+                if (db) {
+                    set(boardRef, data).catch((err) => {
+                        console.error("Firebase Sync Error:", err);
+                    });
+                }
+            }, 1000);
         },
         { equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b) }
     );
