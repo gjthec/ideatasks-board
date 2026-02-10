@@ -1,10 +1,8 @@
-
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { BoardState, Note, NoteColor, Stroke, TaskStatus, ToolType, Viewport, DEFAULT_JOBS } from './types';
 import { db, IS_FIREBASE } from './firebaseConfig';
-import { ref, onValue, set } from "firebase/database";
-// Fix: Use correct GenAI imports and types
+import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 
 const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
@@ -27,6 +25,7 @@ export const useBoardStore = create<BoardState>()(
     clipboard: [],
     isDashboardOpen: false,
     isGeneratingAI: false,
+    isSyncing: false,
 
     setTool: (tool) => setStore({ tool, selectedNoteIds: [] }),
     setPenColor: (penColor) => setStore({ penColor }),
@@ -215,10 +214,8 @@ export const useBoardStore = create<BoardState>()(
       setStore({ isGeneratingAI: true });
 
       try {
-        // Fix: Create instance right before call and follow naming/initialization guidelines
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const response: GenerateContentResponse = await ai.models.generateContent({
-          // Fix: Use 'gemini-3-pro-preview' for complex brainstorming/reasoning tasks
           model: 'gemini-3-pro-preview',
           contents: `Brainstorm and expand upon the following idea: "${note.content}". Provide 3 concise suggestions or related tasks.`,
           config: {
@@ -226,7 +223,6 @@ export const useBoardStore = create<BoardState>()(
           }
         });
 
-        // Fix: Directly access the .text property (do not call it as a method)
         const aiText = response.text;
         if (aiText) {
           const updatedContent = note.content + "\n\n--- AI Brainstorm ---\n" + aiText;
@@ -241,17 +237,17 @@ export const useBoardStore = create<BoardState>()(
   }))
 );
 
-// --- PERSISTENCE LOGIC ---
+// --- PERSISTENCE LOGIC (FIRESTORE) ---
 
 let isExternalUpdate = false;
 
 if (IS_FIREBASE && db) {
-    const boardRef = ref(db, 'board_v1');
+    const boardDocRef = doc(db, 'ideatasks', 'board_main');
 
-    // Subscribe to Firebase changes (onValue)
-    onValue(boardRef, (snapshot) => {
-        const data = snapshot.val();
-        if (data) {
+    // Subscribe to Firestore changes (onSnapshot)
+    onSnapshot(boardDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+            const data = docSnap.data();
             isExternalUpdate = true;
             useBoardStore.getState().loadBoard({
                 notes: data.notes || [],
@@ -262,10 +258,10 @@ if (IS_FIREBASE && db) {
             isExternalUpdate = false;
         }
     }, (error) => {
-        console.error("Firebase Read Error:", error);
+        console.error("Firestore Listen Error:", error);
     });
 
-    // Push local changes to Firebase
+    // Push local changes to Firestore
     let syncTimeout: any = null;
     useBoardStore.subscribe(
         (state) => ({ 
@@ -278,13 +274,18 @@ if (IS_FIREBASE && db) {
             if (isExternalUpdate) return;
             if (syncTimeout) clearTimeout(syncTimeout);
             
+            useBoardStore.setState({ isSyncing: true });
+            
             syncTimeout = setTimeout(() => {
                 if (db) {
-                    set(boardRef, data).catch((err) => {
-                        console.error("Firebase Sync Error:", err);
-                    });
+                    setDoc(boardDocRef, data, { merge: true })
+                        .then(() => useBoardStore.setState({ isSyncing: false }))
+                        .catch((err) => {
+                            console.error("Firestore Sync Error:", err);
+                            useBoardStore.setState({ isSyncing: false });
+                        });
                 }
-            }, 1000);
+            }, 800);
         },
         { equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b) }
     );

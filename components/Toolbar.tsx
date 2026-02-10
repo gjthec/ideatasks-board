@@ -3,11 +3,13 @@ import {
   MousePointer2, Hand, Pen, Eraser, 
   StickyNote, Download, Upload, Trash2, 
   Moon, Sun, Plus, Minus, Briefcase, X,
-  LayoutDashboard, Check, Trash, Scan
+  LayoutDashboard, Check, Trash, Scan,
+  Cloud, CloudOff, RefreshCw
 } from 'lucide-react';
 import { useBoardStore } from '../store';
 import { ToolType, NoteColor, DEFAULT_JOBS, TaskStatus } from '../types';
 import { generateId, getNoteColorFromJobColor } from '../utils';
+import { IS_FIREBASE } from '../firebaseConfig';
 
 const COLORS = [
   '#000000', '#ef4444', '#22c55e', '#3b82f6', '#a855f7'
@@ -28,7 +30,7 @@ export const Toolbar: React.FC = () => {
     isDarkMode, toggleDarkMode,
     notes, strokes, jobs, 
     updateJobName, addJob, deleteJob, loadBoard,
-    setDashboardOpen
+    setDashboardOpen, isSyncing
   } = useBoardStore();
 
   const [showJobSettings, setShowJobSettings] = useState(false);
@@ -106,13 +108,21 @@ export const Toolbar: React.FC = () => {
 
   return (
     <>
-      {/* 
-         RESPONSIVE CONTAINER:
-         - Mobile: bottom-4, max-w-[95vw]
-         - Desktop (md): top-4, bottom-auto
-      */}
       <div className="fixed bottom-4 md:top-4 md:bottom-auto left-1/2 -translate-x-1/2 bg-white dark:bg-gray-800 shadow-xl rounded-xl p-2 flex items-center gap-2 md:gap-4 border border-gray-200 dark:border-gray-700 z-50 overflow-x-auto max-w-[95vw] scrollbar-hide">
         
+        {/* Sync Status Indicator */}
+        <div className="flex items-center px-2 border-r border-gray-200 dark:border-gray-700 shrink-0" title={IS_FIREBASE ? (isSyncing ? 'Syncing to Firebase...' : 'Synced to Firebase') : 'Offline Mode (Local Only)'}>
+            {IS_FIREBASE ? (
+                isSyncing ? (
+                    <RefreshCw size={18} className="text-blue-500 animate-spin" />
+                ) : (
+                    <Cloud size={18} className="text-green-500" />
+                )
+            ) : (
+                <CloudOff size={18} className="text-gray-400" />
+            )}
+        </div>
+
         {/* Tools Group */}
         <div className="flex items-center gap-1 border-r border-gray-200 dark:border-gray-700 pr-2 md:pr-3 shrink-0">
           <ToolButton 
@@ -152,7 +162,6 @@ export const Toolbar: React.FC = () => {
           
           {tool === ToolType.PEN && (
             <div className="flex items-center gap-2 ml-2">
-              {/* Hide Range on mobile to save space, or make it smaller */}
               <input 
                 type="range" 
                 min="1" max="20" 
@@ -176,7 +185,6 @@ export const Toolbar: React.FC = () => {
 
         {/* Actions Group */}
         <div className="flex items-center gap-1 shrink-0">
-          {/* Zoom Controls: Often redundant on mobile with Pinch, but good for accessibility */}
           <div className="flex items-center hidden sm:flex">
               <button 
                   onClick={() => handleZoom(-0.1)}
@@ -258,7 +266,7 @@ export const Toolbar: React.FC = () => {
         </div>
       </div>
 
-      {/* Companies Modal - Responsive */}
+      {/* Companies Modal */}
       {showJobSettings && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] backdrop-blur-sm px-4">
           <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-2xl w-full max-w-[450px] border border-gray-200 dark:border-gray-700 animate-in fade-in zoom-in duration-200">
@@ -272,7 +280,6 @@ export const Toolbar: React.FC = () => {
                </button>
              </div>
              
-             {/* List Existing Jobs */}
              <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 mb-6">
                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Existing Companies</p>
                {jobs.map((job) => (
@@ -297,7 +304,6 @@ export const Toolbar: React.FC = () => {
                ))}
              </div>
 
-             {/* Add New Job */}
              <div className="bg-gray-50 dark:bg-gray-700/50 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Add New Company</p>
                 <div className="flex gap-2 mb-3 overflow-x-auto pb-1 scrollbar-hide">

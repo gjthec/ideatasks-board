@@ -73,8 +73,10 @@ export interface BoardState {
   penSize: number;
   isDarkMode: boolean;
   selectedNoteIds: string[];
-  clipboard: Note[]; // New clipboard state
+  clipboard: Note[]; 
   isDashboardOpen: boolean;
+  isGeneratingAI: boolean; 
+  isSyncing: boolean; // Tracking Firebase sync state
   
   // Actions
   setTool: (tool: ToolType) => void;
@@ -89,8 +91,8 @@ export interface BoardState {
   updateNote: (id: string, updates: Partial<Note>) => void;
   deleteNote: (id: string) => void;
   duplicateNote: (id: string) => void;
-  copySelection: () => void; // New Action
-  pasteClipboard: () => void; // New Action
+  copySelection: () => void;
+  pasteClipboard: () => void;
   selectNote: (id: string | null, multi?: boolean) => void;
   bringToFront: (id: string) => void;
   
@@ -104,4 +106,7 @@ export interface BoardState {
   
   setViewport: (viewport: Viewport) => void;
   loadBoard: (data: { notes: Note[], strokes: Stroke[], viewport: Viewport, jobs?: Job[] }) => void;
+
+  // AI Actions
+  generateBrainstorm: (noteId: string) => Promise<void>;
 }
