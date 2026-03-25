@@ -4,6 +4,15 @@ import { screenToWorld, getSvgPathFromStroke, generateId } from '../utils';
 import { NoteItem } from './NoteItem';
 import { ToolType, Point } from '../types';
 
+
+// Converte apenas traços muito escuros para branco durante a renderização no modo escuro.
+const getStrokeDisplayColor = (color: string, isDarkMode: boolean) => {
+  if (!isDarkMode) return color;
+  const normalized = (color || '').trim().toLowerCase();
+  const darkColors = new Set(['#000', '#000000', 'black', 'rgb(0,0,0)', 'rgb(0, 0, 0)']);
+  return darkColors.has(normalized) ? '#ffffff' : color;
+};
+
 // Helper for distance between two points
 const getDistance = (p1: Point, p2: Point) => {
   return Math.hypot(p2.x - p1.x, p2.y - p1.y);
@@ -25,7 +34,7 @@ export const Board: React.FC = () => {
     tool, addStroke, deleteStroke,
     selectNote, selectedNoteIds, updateNote, deleteNote, duplicateNote,
     copySelection, pasteClipboard,
-    penColor, penSize 
+    penColor, penSize, isDarkMode 
   } = useBoardStore();
 
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
@@ -374,7 +383,7 @@ export const Board: React.FC = () => {
         <div 
             className="absolute inset-0 pointer-events-none opacity-20 dark:opacity-10"
             style={{
-                backgroundImage: `radial-gradient(circle, #000 1px, transparent 1px)`,
+                backgroundImage: `radial-gradient(circle, ${isDarkMode ? '#fff' : '#000'} 1px, transparent 1px)`,
                 backgroundSize: `${backgroundSize}px ${backgroundSize}px`,
                 backgroundPosition: backgroundPosition,
             }}
@@ -400,7 +409,7 @@ export const Board: React.FC = () => {
                         key={stroke.id}
                         d={getSvgPathFromStroke(stroke)}
                         fill="none"
-                        stroke={stroke.color}
+                        stroke={getStrokeDisplayColor(stroke.color, isDarkMode)}
                         strokeWidth={stroke.size}
                         strokeLinecap="round"
                         strokeLinejoin="round"

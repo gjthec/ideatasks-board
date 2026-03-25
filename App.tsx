@@ -1,9 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Board } from './components/Board';
 import { Toolbar } from './components/Toolbar';
 import { TaskDashboard } from './components/TaskDashboard';
+import { LoginPanel } from './components/LoginPanel';
+import { useBoardStore } from './store';
 
 const App: React.FC = () => {
+  const { initializeAuth, currentUser, isAuthReady } = useBoardStore();
+
+  useEffect(() => {
+    // Inicializa observador de autenticação na subida da aplicação.
+    initializeAuth();
+  }, [initializeAuth]);
+
   return (
     <div className="w-screen h-screen overflow-hidden flex flex-col relative">
       <Toolbar />
@@ -11,6 +20,7 @@ const App: React.FC = () => {
         <Board />
       </div>
       <TaskDashboard />
+      {isAuthReady && !currentUser && <LoginPanel />}
     </div>
   );
 };
