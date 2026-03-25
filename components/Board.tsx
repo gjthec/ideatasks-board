@@ -25,7 +25,7 @@ export const Board: React.FC = () => {
     tool, addStroke, deleteStroke,
     selectNote, selectedNoteIds, updateNote, deleteNote, duplicateNote,
     copySelection, pasteClipboard,
-    penColor, penSize 
+    penColor, penSize, isDarkMode 
   } = useBoardStore();
 
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
@@ -374,7 +374,7 @@ export const Board: React.FC = () => {
         <div 
             className="absolute inset-0 pointer-events-none opacity-20 dark:opacity-10"
             style={{
-                backgroundImage: `radial-gradient(circle, #000 1px, transparent 1px)`,
+                backgroundImage: `radial-gradient(circle, ${isDarkMode ? '#fff' : '#000'} 1px, transparent 1px)`,
                 backgroundSize: `${backgroundSize}px ${backgroundSize}px`,
                 backgroundPosition: backgroundPosition,
             }}

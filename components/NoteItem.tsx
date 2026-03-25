@@ -105,7 +105,7 @@ export const NoteItem: React.FC<NoteItemProps> = ({ note, onMouseDown }) => {
       onDoubleClick={() => setIsEditing(true)}
     >
       {/* Header / Drag Handle */}
-      <div className="h-7 flex items-center justify-between px-2 cursor-grab active:cursor-grabbing border-b border-black/5 gap-2 relative">
+      <div className="h-7 flex items-center justify-between px-2 cursor-grab active:cursor-grabbing border-b border-black/5 dark:border-white/10 gap-2 relative">
         
         {/* Left Side: Job Selector */}
         <div className="flex items-center gap-1 max-w-[70%]">
@@ -142,7 +142,7 @@ export const NoteItem: React.FC<NoteItemProps> = ({ note, onMouseDown }) => {
         {isSelected && (
            <div className="flex gap-1 ml-auto shrink-0">
                 <button 
-                    className="p-0.5 hover:bg-black/10 rounded" 
+                    className="p-0.5 hover:bg-black/10 dark:hover:bg-white/10 rounded" 
                     onPointerDown={(e) => { stopPropagation(e); duplicateNote(note.id); }}
                     title="Duplicate"
                 >
@@ -163,7 +163,7 @@ export const NoteItem: React.FC<NoteItemProps> = ({ note, onMouseDown }) => {
       <div className="flex-1 p-2 overflow-hidden relative flex flex-col">
         {note.isTask && (
              <div 
-             className="flex items-center gap-2 cursor-pointer mb-2 pb-1 border-b border-black/5" 
+             className="flex items-center gap-2 cursor-pointer mb-2 pb-1 border-b border-black/5 dark:border-white/10" 
              onClick={(e) => { stopPropagation(e as any); updateNote(note.id, { status: note.status === TaskStatus.DONE ? TaskStatus.TODO : TaskStatus.DONE }); }}
              onPointerDown={(e) => stopPropagation(e)}
            >
@@ -191,10 +191,10 @@ export const NoteItem: React.FC<NoteItemProps> = ({ note, onMouseDown }) => {
       </div>
 
       {/* Footer Controls */}
-      <div className="h-8 flex items-center justify-between px-2 border-t border-black/5 bg-black/5 rounded-b-lg">
+      <div className="h-8 flex items-center justify-between px-2 border-t border-black/5 dark:border-white/10 bg-black/5 dark:bg-white/5 rounded-b-lg">
          <div className="flex items-center gap-1">
             <button 
-                className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${note.isTask ? 'bg-blue-500 text-white' : 'hover:bg-black/10 text-gray-600 dark:text-gray-400'}`}
+                className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded ${note.isTask ? 'bg-blue-500 text-white' : 'hover:bg-black/10 dark:hover:bg-white/10 text-gray-600 dark:text-gray-400'}`}
                 onPointerDown={(e) => { stopPropagation(e); updateNote(note.id, { isTask: !note.isTask }); }}
             >
                 <CheckSquare size={10} />
@@ -219,7 +219,7 @@ export const NoteItem: React.FC<NoteItemProps> = ({ note, onMouseDown }) => {
                  {(['low', 'medium', 'high'] as const).map(p => (
                      <div 
                         key={p} 
-                        className={`w-2 h-2 rounded-full cursor-pointer ${note.priority === p ? 'ring-1 ring-black' : 'opacity-30'}`}
+                        className={`w-2 h-2 rounded-full cursor-pointer ${note.priority === p ? 'ring-1 ring-black dark:ring-white' : 'opacity-30'}`}
                         style={{ backgroundColor: p === 'high' ? 'red' : p === 'medium' ? 'orange' : 'green'}}
                         onPointerDown={(e) => { stopPropagation(e); updateNote(note.id, { priority: p }); }}
                         title={p}
