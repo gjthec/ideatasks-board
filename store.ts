@@ -39,12 +39,48 @@ let prefsUnsubscribe: (() => void) | null = null;
 let authUnsubscribe: (() => void) | null = null;
 let isApplyingRemoteState = false;
 let prefDebounce: ReturnType<typeof setTimeout> | null = null;
+let boardSyncDebounce: ReturnType<typeof setTimeout> | null = null;
 
 const applyTheme = (isDark: boolean) => {
   if (isDark) document.documentElement.classList.add('dark');
   else document.documentElement.classList.remove('dark');
 };
 
+
+
+// Corrige freeze: sincroniza board somente após ações locais (debounce),
+// evitando loop de escrita causado por snapshots remotos.
+const scheduleBoardSync = () => {
+  if (!IS_FIREBASE || isApplyingRemoteState) return;
+
+  if (boardSyncDebounce) clearTimeout(boardSyncDebounce);
+  boardSyncDebounce = setTimeout(async () => {
+    const state = useBoardStore.getState();
+    const user = state.currentUser;
+    const canvasId = state.activeCanvasId;
+
+    if (!user || !canvasId || isApplyingRemoteState) return;
+
+    useBoardStore.setState({ isSyncing: true });
+    try {
+      await Promise.all(state.notes.map((note) => upsertCard(canvasId, note, user.uid)));
+      await Promise.all(state.strokes.map((stroke) => upsertDrawing(canvasId, stroke, user.uid)));
+
+      const localNoteIds = new Set(state.notes.map((n) => n.id));
+      const localStrokeIds = new Set(state.strokes.map((st) => st.id));
+      const previousState = (globalThis as any).__ideatasks_prev_state as { notes: Note[]; strokes: Stroke[] } | undefined;
+
+      if (previousState) {
+        await Promise.all(previousState.notes.filter((n) => !localNoteIds.has(n.id)).map((n) => deleteCard(canvasId, n.id)));
+        await Promise.all(previousState.strokes.filter((st) => !localStrokeIds.has(st.id)).map((st) => deleteDrawing(canvasId, st.id)));
+      }
+
+      (globalThis as any).__ideatasks_prev_state = { notes: state.notes, strokes: state.strokes };
+    } finally {
+      useBoardStore.setState({ isSyncing: false });
+    }
+  }, 800);
+};
 export const useBoardStore = create<BoardState>()(
   subscribeWithSelector((setStore, get) => ({
     notes: [],
@@ -158,11 +194,19 @@ export const useBoardStore = create<BoardState>()(
           (cards) => {
             isApplyingRemoteState = true;
             setStore({ notes: cards });
+            (globalThis as any).__ideatasks_prev_state = {
+              notes: cards,
+              strokes: useBoardStore.getState().strokes,
+            };
             isApplyingRemoteState = false;
           },
           (drawings) => {
             isApplyingRemoteState = true;
             setStore({ strokes: drawings });
+            (globalThis as any).__ideatasks_prev_state = {
+              notes: useBoardStore.getState().notes,
+              strokes: drawings,
+            };
             isApplyingRemoteState = false;
           }
         );
@@ -233,25 +277,31 @@ export const useBoardStore = create<BoardState>()(
         };
       }),
 
-    addNote: (note) =>
+    addNote: (note) => {
       setStore((state) => ({
         notes: [...state.notes, { ...note, zIndex: state.notes.length + 1 }],
         selectedNoteIds: [note.id],
         tool: ToolType.SELECT,
-      })),
+      }));
+      scheduleBoardSync();
+    },
 
-    updateNote: (id, updates) =>
+    updateNote: (id, updates) => {
       setStore((state) => ({
         notes: state.notes.map((n) => (n.id === id ? { ...n, ...updates } : n)),
-      })),
+      }));
+      scheduleBoardSync();
+    },
 
-    deleteNote: (id) =>
+    deleteNote: (id) => {
       setStore((state) => ({
         notes: state.notes.filter((n) => n.id !== id),
         selectedNoteIds: state.selectedNoteIds.filter((sid) => sid !== id),
-      })),
+      }));
+      scheduleBoardSync();
+    },
 
-    duplicateNote: (id) =>
+    duplicateNote: (id) => {
       setStore((state) => {
         const noteToCopy = state.notes.find((n) => n.id === id);
         if (!noteToCopy) return {};
@@ -263,7 +313,9 @@ export const useBoardStore = create<BoardState>()(
           zIndex: state.notes.length + 1,
         };
         return { notes: [...state.notes, newNote], selectedNoteIds: [newNote.id] };
-      }),
+      });
+      scheduleBoardSync();
+    },
 
     copySelection: () =>
       setStore((state) => {
@@ -272,7 +324,7 @@ export const useBoardStore = create<BoardState>()(
         return { clipboard: selected.map((n) => ({ ...n })) };
       }),
 
-    pasteClipboard: () =>
+    pasteClipboard: () => {
       setStore((state) => {
         if (!state.clipboard.length) return {};
         const newNotes: Note[] = state.clipboard.map((note) => ({
@@ -287,7 +339,9 @@ export const useBoardStore = create<BoardState>()(
           selectedNoteIds: newNotes.map((n) => n.id),
           clipboard: state.clipboard.map((n) => ({ ...n, x: n.x + 20, y: n.y + 20 })),
         };
-      }),
+      });
+      scheduleBoardSync();
+    },
 
     selectNote: (id, multi = false) =>
       setStore((state) => {
@@ -317,18 +371,29 @@ export const useBoardStore = create<BoardState>()(
         notes: state.notes.map((n) => (n.job === id ? { ...n, job: state.jobs[0]?.id || 'default' } : n)),
       })),
 
-    addStroke: (stroke) => setStore((state) => ({ strokes: [...state.strokes, stroke] })),
-    deleteStroke: (id) => setStore((state) => ({ strokes: state.strokes.filter((s) => s.id !== id) })),
+    addStroke: (stroke) => {
+      setStore((state) => ({ strokes: [...state.strokes, stroke] }));
+      scheduleBoardSync();
+    },
+    deleteStroke: (id) => {
+      setStore((state) => ({ strokes: state.strokes.filter((s) => s.id !== id) }));
+      scheduleBoardSync();
+    },
 
-    clearBoard: () => setStore({ notes: [], strokes: [], viewport: DEFAULT_VIEWPORT }),
+    clearBoard: () => {
+      setStore({ notes: [], strokes: [], viewport: DEFAULT_VIEWPORT });
+      scheduleBoardSync();
+    },
     setViewport: (viewport) => setStore({ viewport }),
-    loadBoard: (data) =>
+    loadBoard: (data) => {
       setStore({
         notes: data.notes || [],
         strokes: data.strokes || [],
         viewport: data.viewport || DEFAULT_VIEWPORT,
         jobs: data.jobs || DEFAULT_JOBS,
-      }),
+      });
+      scheduleBoardSync();
+    },
 
     generateBrainstorm: async (noteId) => {
       const state = get();
@@ -387,44 +452,3 @@ useBoardStore.subscribe(
   }
 );
 
-// Sincroniza alterações de cards/desenhos em tempo real de forma otimista
-useBoardStore.subscribe(
-  (state) => ({
-    user: state.currentUser,
-    canvasId: state.activeCanvasId,
-    notes: state.notes,
-    strokes: state.strokes,
-    isSyncing: state.isSyncing,
-  }),
-  async ({ user, canvasId, notes, strokes }) => {
-    if (!IS_FIREBASE || !user || !canvasId || isApplyingRemoteState) return;
-
-    useBoardStore.setState({ isSyncing: true });
-    try {
-      await Promise.all(notes.map((note) => upsertCard(canvasId, note, user.uid)));
-      await Promise.all(strokes.map((stroke) => upsertDrawing(canvasId, stroke, user.uid)));
-
-      // Remove documentos que não existem mais localmente
-      const state = useBoardStore.getState();
-      const localNoteIds = new Set(state.notes.map((n) => n.id));
-      const localStrokeIds = new Set(state.strokes.map((s) => s.id));
-
-      const previousState = (globalThis as any).__ideatasks_prev_state as { notes: Note[]; strokes: Stroke[] } | undefined;
-      if (previousState) {
-        await Promise.all(
-          previousState.notes.filter((n) => !localNoteIds.has(n.id)).map((n) => deleteCard(canvasId, n.id))
-        );
-        await Promise.all(
-          previousState.strokes
-            .filter((s) => !localStrokeIds.has(s.id))
-            .map((s) => deleteDrawing(canvasId, s.id))
-        );
-      }
-
-      (globalThis as any).__ideatasks_prev_state = { notes: state.notes, strokes: state.strokes };
-    } finally {
-      useBoardStore.setState({ isSyncing: false });
-    }
-  },
-  { equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b) }
-);
