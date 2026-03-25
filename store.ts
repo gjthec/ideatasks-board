@@ -182,7 +182,7 @@ export const useBoardStore = create<BoardState>()(
           applyTheme(remotePrefs.theme === 'dark');
         });
 
-        const canvasId = await getOrCreateUserCanvas(user.uid);
+        const canvasId = await getOrCreateUserCanvas(user.uid, user.email);
         if (!canvasId) return;
 
         await migrateLocalDataToCanvas(user.uid, canvasId, STORAGE_KEY);

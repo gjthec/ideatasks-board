@@ -1,7 +1,6 @@
 import { db } from './firebaseConfig';
 import { Note, Stroke } from './types';
 import {
-  addDoc,
   collection,
   deleteDoc,
   doc,
@@ -16,22 +15,55 @@ import {
 
 const canvasCollection = () => collection(db!, 'canvases');
 
-export const getOrCreateUserCanvas = async (uid: string) => {
+const sanitizeCanvasKey = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+export const getOrCreateUserCanvas = async (uid: string, email?: string | null) => {
   if (!db) return null;
+
+  // Novo padrão: usa o trecho antes de '@' do e-mail como chave do canvas.
+  const emailPrefix = email?.split('@')?.[0] || '';
+  const safeCanvasId = sanitizeCanvasKey(emailPrefix);
+  if (safeCanvasId) {
+    await setDoc(
+      doc(db, 'canvases', safeCanvasId),
+      {
+        canvasId: safeCanvasId,
+        ownerUid: uid,
+        title: 'Meu Canvas',
+        members: [uid],
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return safeCanvasId;
+  }
+
+  // Fallback: mantém estratégia anterior para contas sem e-mail válido.
   const canvasQuery = query(canvasCollection(), where('ownerUid', '==', uid), limit(1));
   const snapshot = await getDocs(canvasQuery);
   if (!snapshot.empty) return snapshot.docs[0].id;
 
-  const canvasDoc = await addDoc(canvasCollection(), {
-    ownerUid: uid,
-    title: 'Meu Canvas',
-    members: [uid],
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  await setDoc(doc(db, 'canvases', canvasDoc.id), { canvasId: canvasDoc.id }, { merge: true });
-  return canvasDoc.id;
+  const fallbackId = `canvas-${uid}`;
+  await setDoc(
+    doc(db, 'canvases', fallbackId),
+    {
+      canvasId: fallbackId,
+      ownerUid: uid,
+      title: 'Meu Canvas',
+      members: [uid],
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+  return fallbackId;
 };
 
 const cardsCollection = (canvasId: string) => collection(db!, 'canvases', canvasId, 'cards');
