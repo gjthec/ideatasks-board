@@ -1,35 +1,37 @@
-
-// Fix: Merged imports from the same module to resolve "no exported member" errors in certain TypeScript environments
 import { initializeApp, type FirebaseApp } from 'firebase/app';
+import { getAuth, type Auth } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
 
 // --- CONFIGURATION FLAG ---
-// Set to true to enable Firebase Firestore sync.
-export const IS_FIREBASE = true; // Enabled by default as user wants "registered" notes
+// Ativa a integração com Firebase (Firestore + Auth)
+export const IS_FIREBASE = true;
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCID7AGwR-tfNsiJIBd0nPfBGE5adLAbwY",
-  authDomain: "train-api-49052.firebaseapp.com",
-  projectId: "train-api-49052",
-  storageBucket: "train-api-49052.firebasestorage.app",
-  messagingSenderId: "1056584302761",
-  appId: "1:1056584302761:web:659d6c4a3692ded2c4a9b8",
-  measurementId: "G-DT7ZYWWZ8E"
+  apiKey: 'AIzaSyCID7AGwR-tfNsiJIBd0nPfBGE5adLAbwY',
+  authDomain: 'train-api-49052.firebaseapp.com',
+  projectId: 'train-api-49052',
+  storageBucket: 'train-api-49052.firebasestorage.app',
+  messagingSenderId: '1056584302761',
+  appId: '1:1056584302761:web:659d6c4a3692ded2c4a9b8',
+  measurementId: 'G-DT7ZYWWZ8E',
 };
 
 let db: Firestore | null = null;
+let auth: Auth | null = null;
 
 if (IS_FIREBASE) {
   try {
     const app: FirebaseApp = initializeApp(firebaseConfig);
     db = getFirestore(app);
-    console.log("🔥 Firestore initialized and active.");
+    auth = getAuth(app);
+    console.log('🔥 Firestore/Auth inicializados com sucesso.');
   } catch (e) {
-    console.warn("Firebase initialization failed. Check your config or connection.", e);
+    console.warn('Falha na inicialização do Firebase.', e);
     db = null;
+    auth = null;
   }
 } else {
-  console.log("💾 Offline Mode Active (LocalStorage). Set IS_FIREBASE = true in firebaseConfig.ts to sync.");
+  console.log('💾 Modo local ativo (LocalStorage).');
 }
 
-export { db };
+export { db, auth };

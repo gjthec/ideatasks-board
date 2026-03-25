@@ -63,6 +63,14 @@ export interface Viewport {
   zoom: number;
 }
 
+
+export interface AuthUser {
+  uid: string;
+  displayName: string | null;
+  email: string | null;
+  photoURL: string | null;
+}
+
 export interface BoardState {
   notes: Note[];
   strokes: Stroke[];
@@ -77,6 +85,11 @@ export interface BoardState {
   isDashboardOpen: boolean;
   isGeneratingAI: boolean; 
   isSyncing: boolean; // Tracking Firebase sync state
+  currentUser: AuthUser | null;
+  isAuthReady: boolean;
+  activeCanvasId: string | null;
+  lastCardColor: string;
+  defaultCardStatus: TaskStatus;
   
   // Actions
   setTool: (tool: ToolType) => void;
@@ -84,6 +97,9 @@ export interface BoardState {
   setPenSize: (size: number) => void;
   toggleDarkMode: () => void;
   setDashboardOpen: (isOpen: boolean) => void;
+  setLastCardColor: (color: string) => void;
+  setDefaultCardStatus: (status: TaskStatus) => void;
+  initializeAuth: () => void;
   centerView: () => void;
   focusOnNote: (id: string) => void;
   

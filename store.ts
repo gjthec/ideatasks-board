@@ -1,15 +1,49 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
-import { BoardState, Note, NoteColor, Stroke, TaskStatus, ToolType, Viewport, DEFAULT_JOBS } from './types';
-import { db, IS_FIREBASE } from './firebaseConfig';
-import { doc, onSnapshot, setDoc } from "firebase/firestore";
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import {
+  BoardState,
+  Note,
+  Stroke,
+  TaskStatus,
+  ToolType,
+  Viewport,
+  DEFAULT_JOBS,
+} from './types';
+import { GoogleGenAI, GenerateContentResponse } from '@google/genai';
+import { IS_FIREBASE } from './firebaseConfig';
+import { authService } from './authService';
+import {
+  DEFAULT_USER_PREFERENCES,
+  UserPreferences,
+  ensureUserPreferences,
+  saveUserPreferences,
+  subscribeToUserPreferences,
+} from './userPreferencesService';
+import {
+  deleteCard,
+  deleteDrawing,
+  getOrCreateUserCanvas,
+  migrateLocalDataToCanvas,
+  subscribeCanvasRealtime,
+  upsertCard,
+  upsertDrawing,
+} from './canvasService';
 
 const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
 const STORAGE_KEY = 'ideatasks-board-v1';
 
-// Helper to generate IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+let syncUnsubscribe: (() => void) | null = null;
+let prefsUnsubscribe: (() => void) | null = null;
+let authUnsubscribe: (() => void) | null = null;
+let isApplyingRemoteState = false;
+let prefDebounce: ReturnType<typeof setTimeout> | null = null;
+
+const applyTheme = (isDark: boolean) => {
+  if (isDark) document.documentElement.classList.add('dark');
+  else document.documentElement.classList.remove('dark');
+};
 
 export const useBoardStore = create<BoardState>()(
   subscribeWithSelector((setStore, get) => ({
@@ -26,307 +60,371 @@ export const useBoardStore = create<BoardState>()(
     isDashboardOpen: false,
     isGeneratingAI: false,
     isSyncing: false,
+    currentUser: null,
+    isAuthReady: false,
+    activeCanvasId: null,
+    lastCardColor: DEFAULT_USER_PREFERENCES.lastCardColor,
+    defaultCardStatus: TaskStatus.TODO,
 
     setTool: (tool) => setStore({ tool, selectedNoteIds: [] }),
     setPenColor: (penColor) => setStore({ penColor }),
     setPenSize: (penSize) => setStore({ penSize }),
     toggleDarkMode: () => setStore((state) => ({ isDarkMode: !state.isDarkMode })),
     setDashboardOpen: (isOpen) => setStore({ isDashboardOpen: isOpen }),
+    setLastCardColor: (color) => setStore({ lastCardColor: color }),
+    setDefaultCardStatus: (status) => setStore({ defaultCardStatus: status }),
 
-    centerView: () => setStore((state) => {
-        if (state.notes.length === 0 && state.strokes.length === 0) {
-            return { viewport: DEFAULT_VIEWPORT };
+    initializeAuth: () => {
+      if (authUnsubscribe) return;
+
+      if (!IS_FIREBASE) {
+        const savedState = localStorage.getItem(STORAGE_KEY);
+        if (savedState) {
+          try {
+            get().loadBoard(JSON.parse(savedState));
+          } catch (error) {
+            console.error('LocalStorage load error', error);
+          }
+        }
+        const dark = localStorage.getItem('ideatasks-darkmode') === 'true';
+        setStore({ isDarkMode: dark, isAuthReady: true });
+        applyTheme(dark);
+        return;
+      }
+
+      authUnsubscribe = authService.onAuthChange(async (user) => {
+        if (!user) {
+          syncUnsubscribe?.();
+          prefsUnsubscribe?.();
+          syncUnsubscribe = null;
+          prefsUnsubscribe = null;
+          setStore({
+            currentUser: null,
+            activeCanvasId: null,
+            notes: [],
+            strokes: [],
+            viewport: DEFAULT_VIEWPORT,
+            isAuthReady: true,
+          });
+          return;
         }
 
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        setStore({ currentUser: user, isAuthReady: true });
 
-        state.notes.forEach(n => {
-            minX = Math.min(minX, n.x);
-            minY = Math.min(minY, n.y);
-            maxX = Math.max(maxX, n.x + n.width);
-            maxY = Math.max(maxY, n.y + n.height);
+        const prefs = await ensureUserPreferences(user.uid);
+        const isDark = prefs.theme === 'dark';
+        isApplyingRemoteState = true;
+        setStore({
+          isDarkMode: isDark,
+          lastCardColor: prefs.lastCardColor,
+          defaultCardStatus: (prefs.defaultCardStatus as TaskStatus) || TaskStatus.TODO,
+          viewport: {
+            x: prefs.canvasOffset?.x ?? 0,
+            y: prefs.canvasOffset?.y ?? 0,
+            zoom: prefs.lastZoomLevel || 1,
+          },
+        });
+        isApplyingRemoteState = false;
+        applyTheme(isDark);
+
+        prefsUnsubscribe?.();
+        prefsUnsubscribe = subscribeToUserPreferences(user.uid, (remotePrefs: UserPreferences) => {
+          if (isApplyingRemoteState) return;
+          isApplyingRemoteState = true;
+          setStore({
+            isDarkMode: remotePrefs.theme === 'dark',
+            lastCardColor: remotePrefs.lastCardColor,
+            defaultCardStatus: (remotePrefs.defaultCardStatus as TaskStatus) || TaskStatus.TODO,
+            viewport: {
+              ...get().viewport,
+              x: remotePrefs.canvasOffset?.x ?? get().viewport.x,
+              y: remotePrefs.canvasOffset?.y ?? get().viewport.y,
+              zoom: remotePrefs.lastZoomLevel || get().viewport.zoom,
+            },
+          });
+          isApplyingRemoteState = false;
+          applyTheme(remotePrefs.theme === 'dark');
         });
 
-        state.strokes.forEach(s => {
-            s.points.forEach(p => {
-                minX = Math.min(minX, p.x);
-                minY = Math.min(minY, p.y);
-                maxX = Math.max(maxX, p.x);
-                maxY = Math.max(maxY, p.y);
-            });
-        });
+        const canvasId = await getOrCreateUserCanvas(user.uid);
+        if (!canvasId) return;
 
-        if (minX === Infinity) return { viewport: DEFAULT_VIEWPORT };
+        await migrateLocalDataToCanvas(user.uid, canvasId, STORAGE_KEY);
+        setStore({ activeCanvasId: canvasId });
+
+        syncUnsubscribe?.();
+        syncUnsubscribe = subscribeCanvasRealtime(
+          canvasId,
+          (cards) => {
+            isApplyingRemoteState = true;
+            setStore({ notes: cards });
+            isApplyingRemoteState = false;
+          },
+          (drawings) => {
+            isApplyingRemoteState = true;
+            setStore({ strokes: drawings });
+            isApplyingRemoteState = false;
+          }
+        );
+      });
+    },
+
+    centerView: () =>
+      setStore((state) => {
+        if (state.notes.length === 0 && state.strokes.length === 0) {
+          return { viewport: DEFAULT_VIEWPORT };
+        }
+
+        let minX = Infinity,
+          minY = Infinity,
+          maxX = -Infinity,
+          maxY = -Infinity;
+        state.notes.forEach((n) => {
+          minX = Math.min(minX, n.x);
+          minY = Math.min(minY, n.y);
+          maxX = Math.max(maxX, n.x + n.width);
+          maxY = Math.max(maxY, n.y + n.height);
+        });
+        state.strokes.forEach((s) => {
+          s.points.forEach((p) => {
+            minX = Math.min(minX, p.x);
+            minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x);
+            maxY = Math.max(maxY, p.y);
+          });
+        });
 
         const contentWidth = maxX - minX;
         const contentHeight = maxY - minY;
         const padding = 100;
-        
-        const windowW = window.innerWidth;
-        const windowH = window.innerHeight;
-
-        let zoom = Math.min(
-            (windowW - padding * 2) / contentWidth,
-            (windowH - padding * 2) / contentHeight
+        const zoom = Math.min(
+          Math.max(
+            Math.min(
+              (window.innerWidth - padding * 2) / contentWidth,
+              (window.innerHeight - padding * 2) / contentHeight
+            ),
+            0.1
+          ),
+          1
         );
 
-        zoom = Math.min(Math.max(zoom, 0.1), 1);
-
-        const contentCenterX = minX + contentWidth / 2;
-        const contentCenterY = minY + contentHeight / 2;
-        
-        const newX = (windowW / 2) - (contentCenterX * zoom);
-        const newY = (windowH / 2) - (contentCenterY * zoom);
-
         return {
-            viewport: { x: newX, y: newY, zoom }
+          viewport: {
+            x: window.innerWidth / 2 - (minX + contentWidth / 2) * zoom,
+            y: window.innerHeight / 2 - (minY + contentHeight / 2) * zoom,
+            zoom,
+          },
         };
-    }),
+      }),
 
-    focusOnNote: (id) => setStore((state) => {
-        const note = state.notes.find(n => n.id === id);
+    focusOnNote: (id) =>
+      setStore((state) => {
+        const note = state.notes.find((n) => n.id === id);
         if (!note) return {};
-
-        const windowW = window.innerWidth;
-        const windowH = window.innerHeight;
         const targetZoom = Math.max(state.viewport.zoom, 0.8);
-        const noteCenterX = note.x + note.width / 2;
-        const noteCenterY = note.y + note.height / 2;
-
-        const newX = (windowW / 2) - (noteCenterX * targetZoom);
-        const newY = (windowH / 2) - (noteCenterY * targetZoom);
-
         return {
-            viewport: { x: newX, y: newY, zoom: targetZoom },
-            selectedNoteIds: [id],
-            isDashboardOpen: false
+          viewport: {
+            x: window.innerWidth / 2 - (note.x + note.width / 2) * targetZoom,
+            y: window.innerHeight / 2 - (note.y + note.height / 2) * targetZoom,
+            zoom: targetZoom,
+          },
+          selectedNoteIds: [id],
+          isDashboardOpen: false,
         };
-    }),
+      }),
 
-    addNote: (note) => setStore((state) => ({ 
-      notes: [...state.notes, { ...note, zIndex: state.notes.length + 1 }],
-      selectedNoteIds: [note.id],
-      tool: ToolType.SELECT
-    })),
+    addNote: (note) =>
+      setStore((state) => ({
+        notes: [...state.notes, { ...note, zIndex: state.notes.length + 1 }],
+        selectedNoteIds: [note.id],
+        tool: ToolType.SELECT,
+      })),
 
-    updateNote: (id, updates) => setStore((state) => ({
-      notes: state.notes.map((n) => (n.id === id ? { ...n, ...updates } : n)),
-    })),
+    updateNote: (id, updates) =>
+      setStore((state) => ({
+        notes: state.notes.map((n) => (n.id === id ? { ...n, ...updates } : n)),
+      })),
 
-    deleteNote: (id) => setStore((state) => ({
-      notes: state.notes.filter((n) => n.id !== id),
-      selectedNoteIds: state.selectedNoteIds.filter((sid) => sid !== id),
-    })),
+    deleteNote: (id) =>
+      setStore((state) => ({
+        notes: state.notes.filter((n) => n.id !== id),
+        selectedNoteIds: state.selectedNoteIds.filter((sid) => sid !== id),
+      })),
 
-    duplicateNote: (id) => setStore((state) => {
-      const noteToCopy = state.notes.find((n) => n.id === id);
-      if (!noteToCopy) return {};
-      
-      const newNote: Note = {
-        ...noteToCopy,
-        id: generateId(),
-        x: noteToCopy.x + 20,
-        y: noteToCopy.y + 20,
-        zIndex: state.notes.length + 1,
-      };
-      
-      return { notes: [...state.notes, newNote], selectedNoteIds: [newNote.id] };
-    }),
+    duplicateNote: (id) =>
+      setStore((state) => {
+        const noteToCopy = state.notes.find((n) => n.id === id);
+        if (!noteToCopy) return {};
+        const newNote: Note = {
+          ...noteToCopy,
+          id: generateId(),
+          x: noteToCopy.x + 20,
+          y: noteToCopy.y + 20,
+          zIndex: state.notes.length + 1,
+        };
+        return { notes: [...state.notes, newNote], selectedNoteIds: [newNote.id] };
+      }),
 
-    copySelection: () => setStore((state) => {
-        const selected = state.notes.filter(n => state.selectedNoteIds.includes(n.id));
-        if (selected.length === 0) return {};
-        return { clipboard: selected.map(n => ({...n})) };
-    }),
+    copySelection: () =>
+      setStore((state) => {
+        const selected = state.notes.filter((n) => state.selectedNoteIds.includes(n.id));
+        if (!selected.length) return {};
+        return { clipboard: selected.map((n) => ({ ...n })) };
+      }),
 
-    pasteClipboard: () => setStore((state) => {
-        if (state.clipboard.length === 0) return {};
-
+    pasteClipboard: () =>
+      setStore((state) => {
+        if (!state.clipboard.length) return {};
         const newNotes: Note[] = state.clipboard.map((note) => ({
-            ...note,
-            id: generateId(),
-            x: note.x + 20,
-            y: note.y + 20,
-            zIndex: state.notes.length + 1
+          ...note,
+          id: generateId(),
+          x: note.x + 20,
+          y: note.y + 20,
+          zIndex: state.notes.length + 1,
         }));
-
         return {
-            notes: [...state.notes, ...newNotes],
-            selectedNoteIds: newNotes.map(n => n.id),
-            clipboard: state.clipboard.map(n => ({ ...n, x: n.x + 20, y: n.y + 20 }))
+          notes: [...state.notes, ...newNotes],
+          selectedNoteIds: newNotes.map((n) => n.id),
+          clipboard: state.clipboard.map((n) => ({ ...n, x: n.x + 20, y: n.y + 20 })),
         };
-    }),
+      }),
 
-    selectNote: (id, multi = false) => setStore((state) => {
-      if (id === null) return { selectedNoteIds: [] };
-      if (multi) {
-        return { 
-          selectedNoteIds: state.selectedNoteIds.includes(id) 
-            ? state.selectedNoteIds.filter(sid => sid !== id)
-            : [...state.selectedNoteIds, id]
-        };
-      }
-      return { selectedNoteIds: [id] };
-    }),
-
-    bringToFront: (id) => setStore((state) => {
-        const maxZ = Math.max(...state.notes.map(n => n.zIndex), 0);
-        return {
-            notes: state.notes.map(n => n.id === id ? { ...n, zIndex: maxZ + 1 } : n)
+    selectNote: (id, multi = false) =>
+      setStore((state) => {
+        if (id === null) return { selectedNoteIds: [] };
+        if (multi) {
+          return {
+            selectedNoteIds: state.selectedNoteIds.includes(id)
+              ? state.selectedNoteIds.filter((sid) => sid !== id)
+              : [...state.selectedNoteIds, id],
+          };
         }
-    }),
+        return { selectedNoteIds: [id] };
+      }),
 
-    addJob: (name, color) => setStore((state) => ({
-      jobs: [...state.jobs, { id: generateId(), name, color }]
-    })),
+    bringToFront: (id) =>
+      setStore((state) => {
+        const maxZ = Math.max(...state.notes.map((n) => n.zIndex), 0);
+        return { notes: state.notes.map((n) => (n.id === id ? { ...n, zIndex: maxZ + 1 } : n)) };
+      }),
 
-    updateJobName: (id, name) => setStore((state) => ({
-        jobs: state.jobs.map(j => j.id === id ? { ...j, name } : j)
-    })),
-
-    deleteJob: (id) => setStore((state) => ({
-      jobs: state.jobs.filter(j => j.id !== id),
-      notes: state.notes.map(n => n.job === id ? { ...n, job: state.jobs[0]?.id || 'default' } : n)
-    })),
+    addJob: (name, color) => setStore((state) => ({ jobs: [...state.jobs, { id: generateId(), name, color }] })),
+    updateJobName: (id, name) =>
+      setStore((state) => ({ jobs: state.jobs.map((j) => (j.id === id ? { ...j, name } : j)) })),
+    deleteJob: (id) =>
+      setStore((state) => ({
+        jobs: state.jobs.filter((j) => j.id !== id),
+        notes: state.notes.map((n) => (n.job === id ? { ...n, job: state.jobs[0]?.id || 'default' } : n)),
+      })),
 
     addStroke: (stroke) => setStore((state) => ({ strokes: [...state.strokes, stroke] })),
-    
-    deleteStroke: (id) => setStore((state) => ({
-      strokes: state.strokes.filter((s) => s.id !== id),
-    })),
+    deleteStroke: (id) => setStore((state) => ({ strokes: state.strokes.filter((s) => s.id !== id) })),
 
     clearBoard: () => setStore({ notes: [], strokes: [], viewport: DEFAULT_VIEWPORT }),
-
     setViewport: (viewport) => setStore({ viewport }),
-
-    loadBoard: (data) => setStore({
-      notes: data.notes || [],
-      strokes: data.strokes || [],
-      viewport: data.viewport || DEFAULT_VIEWPORT,
-      jobs: data.jobs || DEFAULT_JOBS
-    }),
+    loadBoard: (data) =>
+      setStore({
+        notes: data.notes || [],
+        strokes: data.strokes || [],
+        viewport: data.viewport || DEFAULT_VIEWPORT,
+        jobs: data.jobs || DEFAULT_JOBS,
+      }),
 
     generateBrainstorm: async (noteId) => {
       const state = get();
-      const note = state.notes.find(n => n.id === noteId);
+      const note = state.notes.find((n) => n.id === noteId);
       if (!note || state.isGeneratingAI) return;
-
       setStore({ isGeneratingAI: true });
-
       try {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const response: GenerateContentResponse = await ai.models.generateContent({
           model: 'gemini-3-pro-preview',
           contents: `Brainstorm and expand upon the following idea: "${note.content}". Provide 3 concise suggestions or related tasks.`,
-          config: {
-            systemInstruction: "You are a creative productivity assistant. Keep suggestions brief and actionable."
-          }
+          config: { systemInstruction: 'You are a creative productivity assistant. Keep suggestions brief and actionable.' },
         });
-
-        const aiText = response.text;
-        if (aiText) {
-          const updatedContent = note.content + "\n\n--- AI Brainstorm ---\n" + aiText;
-          state.updateNote(noteId, { content: updatedContent });
-        }
+        if (response.text) state.updateNote(noteId, { content: `${note.content}\n\n--- AI Brainstorm ---\n${response.text}` });
       } catch (error) {
-        console.error("Gemini AI brainstorm failed:", error);
+        console.error('Gemini AI brainstorm failed:', error);
       } finally {
         setStore({ isGeneratingAI: false });
       }
-    }
+    },
   }))
 );
 
-// --- PERSISTENCE LOGIC (FIRESTORE) ---
-
-let isExternalUpdate = false;
-
-if (IS_FIREBASE && db) {
-    const boardDocRef = doc(db, 'ideatasks', 'board_main');
-
-    // Subscribe to Firestore changes (onSnapshot)
-    onSnapshot(boardDocRef, (docSnap) => {
-        if (docSnap.exists()) {
-            const data = docSnap.data();
-            isExternalUpdate = true;
-            useBoardStore.getState().loadBoard({
-                notes: data.notes || [],
-                strokes: data.strokes || [],
-                viewport: data.viewport || DEFAULT_VIEWPORT,
-                jobs: data.jobs || DEFAULT_JOBS
-            });
-            isExternalUpdate = false;
-        }
-    }, (error) => {
-        console.error("Firestore Listen Error:", error);
-    });
-
-    // Push local changes to Firestore
-    let syncTimeout: any = null;
-    useBoardStore.subscribe(
-        (state) => ({ 
-            notes: state.notes, 
-            strokes: state.strokes, 
-            viewport: state.viewport, 
-            jobs: state.jobs 
-        }),
-        (data) => {
-            if (isExternalUpdate) return;
-            if (syncTimeout) clearTimeout(syncTimeout);
-            
-            useBoardStore.setState({ isSyncing: true });
-            
-            syncTimeout = setTimeout(() => {
-                if (db) {
-                    setDoc(boardDocRef, data, { merge: true })
-                        .then(() => useBoardStore.setState({ isSyncing: false }))
-                        .catch((err) => {
-                            console.error("Firestore Sync Error:", err);
-                            useBoardStore.setState({ isSyncing: false });
-                        });
-                }
-            }, 800);
-        },
-        { equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b) }
-    );
-} else {
-    // LocalStorage Fallback
-    const savedState = localStorage.getItem(STORAGE_KEY);
-    if (savedState) {
-        try {
-            const parsed = JSON.parse(savedState);
-            useBoardStore.getState().loadBoard(parsed);
-        } catch(e) {
-            console.error("LocalStorage load error", e);
-        }
-    }
-
-    useBoardStore.subscribe(
-        (state) => ({ 
-            notes: state.notes, 
-            strokes: state.strokes, 
-            viewport: state.viewport, 
-            jobs: state.jobs 
-        }),
-        (data) => { 
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); 
-        },
-        { equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b) }
-    );
+// Persistência local para o modo sem Firebase
+if (!IS_FIREBASE) {
+  useBoardStore.subscribe(
+    (state) => ({ notes: state.notes, strokes: state.strokes, viewport: state.viewport, jobs: state.jobs }),
+    (data) => localStorage.setItem(STORAGE_KEY, JSON.stringify(data)),
+    { equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b) }
+  );
 }
 
-// Dark Mode Persistence
-if (localStorage.getItem('ideatasks-darkmode') === 'true') {
-    useBoardStore.setState({ isDarkMode: true });
-}
+// Sincroniza preferências (tema, zoom, offset, etc) com debounce de 1000ms
 useBoardStore.subscribe(
-    (state) => state.isDarkMode,
-    (isDark) => {
-        localStorage.setItem('ideatasks-darkmode', String(isDark));
-        if (isDark) {
-            document.documentElement.classList.add('dark');
-        } else {
-            document.documentElement.classList.remove('dark');
-        }
+  (state) => ({
+    user: state.currentUser,
+    isDarkMode: state.isDarkMode,
+    viewport: state.viewport,
+    lastCardColor: state.lastCardColor,
+    defaultCardStatus: state.defaultCardStatus,
+  }),
+  ({ user, isDarkMode, viewport, lastCardColor, defaultCardStatus }) => {
+    applyTheme(isDarkMode);
+    if (!IS_FIREBASE || !user || isApplyingRemoteState) return;
+
+    if (prefDebounce) clearTimeout(prefDebounce);
+    prefDebounce = setTimeout(() => {
+      saveUserPreferences(user.uid, {
+        theme: isDarkMode ? 'dark' : 'light',
+        lastCardColor,
+        lastZoomLevel: viewport.zoom,
+        canvasOffset: { x: viewport.x, y: viewport.y },
+        defaultCardStatus: defaultCardStatus as UserPreferences['defaultCardStatus'],
+      });
+    }, 1000);
+  }
+);
+
+// Sincroniza alterações de cards/desenhos em tempo real de forma otimista
+useBoardStore.subscribe(
+  (state) => ({
+    user: state.currentUser,
+    canvasId: state.activeCanvasId,
+    notes: state.notes,
+    strokes: state.strokes,
+    isSyncing: state.isSyncing,
+  }),
+  async ({ user, canvasId, notes, strokes }) => {
+    if (!IS_FIREBASE || !user || !canvasId || isApplyingRemoteState) return;
+
+    useBoardStore.setState({ isSyncing: true });
+    try {
+      await Promise.all(notes.map((note) => upsertCard(canvasId, note, user.uid)));
+      await Promise.all(strokes.map((stroke) => upsertDrawing(canvasId, stroke, user.uid)));
+
+      // Remove documentos que não existem mais localmente
+      const state = useBoardStore.getState();
+      const localNoteIds = new Set(state.notes.map((n) => n.id));
+      const localStrokeIds = new Set(state.strokes.map((s) => s.id));
+
+      const previousState = (globalThis as any).__ideatasks_prev_state as { notes: Note[]; strokes: Stroke[] } | undefined;
+      if (previousState) {
+        await Promise.all(
+          previousState.notes.filter((n) => !localNoteIds.has(n.id)).map((n) => deleteCard(canvasId, n.id))
+        );
+        await Promise.all(
+          previousState.strokes
+            .filter((s) => !localStrokeIds.has(s.id))
+            .map((s) => deleteDrawing(canvasId, s.id))
+        );
+      }
+
+      (globalThis as any).__ideatasks_prev_state = { notes: state.notes, strokes: state.strokes };
+    } finally {
+      useBoardStore.setState({ isSyncing: false });
     }
+  },
+  { equalityFn: (a, b) => JSON.stringify(a) === JSON.stringify(b) }
 );

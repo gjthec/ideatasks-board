@@ -3,13 +3,14 @@ import {
   MousePointer2, Hand, Pen, Eraser, 
   StickyNote, Download, Upload, Trash2, 
   Moon, Sun, Plus, Minus, Briefcase, X,
-  LayoutDashboard, Check, Trash, Scan,
-  Cloud, CloudOff, RefreshCw
+  LayoutDashboard, Trash, Scan,
+  Cloud, CloudOff, RefreshCw, LogOut
 } from 'lucide-react';
 import { useBoardStore } from '../store';
-import { ToolType, NoteColor, DEFAULT_JOBS, TaskStatus } from '../types';
+import { ToolType, DEFAULT_JOBS, TaskStatus } from '../types';
 import { generateId, getNoteColorFromJobColor } from '../utils';
 import { IS_FIREBASE } from '../firebaseConfig';
+import { authService } from '../authService';
 
 const COLORS = [
   '#000000', '#ef4444', '#22c55e', '#3b82f6', '#a855f7'
@@ -28,12 +29,14 @@ export const Toolbar: React.FC = () => {
     addNote, clearBoard,
     viewport, setViewport, centerView,
     isDarkMode, toggleDarkMode,
-    notes, strokes, jobs, 
+    notes, strokes, jobs,
     updateJobName, addJob, deleteJob, loadBoard,
-    setDashboardOpen, isSyncing
+    setDashboardOpen, isSyncing,
+    currentUser, lastCardColor, defaultCardStatus, setLastCardColor
   } = useBoardStore();
 
   const [showJobSettings, setShowJobSettings] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const [newJobName, setNewJobName] = useState('');
   const [newJobColor, setNewJobColor] = useState(JOB_COLORS[0]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -43,8 +46,9 @@ export const Toolbar: React.FC = () => {
     const centerY = (-viewport.y + window.innerHeight / 2) / viewport.zoom;
 
     const currentDefaultJob = jobs[0] || DEFAULT_JOBS[0];
-    const initialColor = getNoteColorFromJobColor(currentDefaultJob.color);
+    const initialColor = lastCardColor || getNoteColorFromJobColor(currentDefaultJob.color);
 
+    setLastCardColor(initialColor);
     addNote({
       id: generateId(),
       x: centerX - 100,
@@ -54,7 +58,7 @@ export const Toolbar: React.FC = () => {
       content: '',
       color: initialColor,
       isTask: false,
-      status: TaskStatus.TODO, 
+      status: defaultCardStatus || TaskStatus.TODO, 
       priority: 'medium',
       job: currentDefaultJob.id,
       zIndex: 0
@@ -264,6 +268,31 @@ export const Toolbar: React.FC = () => {
             <Trash2 size={18} />
           </button>
         </div>
+          <div className="relative ml-1">
+            <button
+              onClick={() => setShowUserMenu((v) => !v)}
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+              title={currentUser?.displayName || currentUser?.email || 'Usuário'}
+            >
+              <div className="w-7 h-7 rounded-full bg-blue-600 text-white text-xs flex items-center justify-center overflow-hidden">
+                {currentUser?.photoURL ? <img src={currentUser.photoURL} className="w-full h-full object-cover" /> : (currentUser?.displayName || currentUser?.email || 'U').slice(0,1).toUpperCase()}
+              </div>
+              <span className="hidden md:block text-xs text-gray-600 dark:text-gray-300 max-w-[90px] truncate">
+                {currentUser?.displayName || currentUser?.email}
+              </span>
+            </button>
+            {showUserMenu && (
+              <div className="absolute right-0 mt-2 w-40 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-1">
+                <button
+                  onClick={() => authService.logout()}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                >
+                  <LogOut size={14} /> Sair
+                </button>
+              </div>
+            )}
+          </div>
+
       </div>
 
       {/* Companies Modal */}
