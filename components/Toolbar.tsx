@@ -267,6 +267,13 @@ export const Toolbar: React.FC = () => {
           >
             <Trash2 size={18} />
           </button>
+          <button
+            onClick={() => authService.logout()}
+            className="p-2 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            title="Logout"
+          >
+            <LogOut size={16} />
+          </button>
         </div>
           <div className="relative ml-1">
             <button
