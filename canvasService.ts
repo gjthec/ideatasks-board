@@ -84,6 +84,7 @@ const normalizeJobs = (raw: unknown): Job[] => {
       if (!id) return null;
       return {
         id,
+        legacyJobId: typeof job?.legacyJobId === 'string' && job.legacyJobId ? job.legacyJobId : id,
         name: normalizeJobName(job, index),
         color: typeof job?.color === 'string' && job.color ? job.color : 'bg-blue-600',
       } as Job;
@@ -95,7 +96,8 @@ export const subscribeCanvasRealtime = (
   canvasId: string,
   onCards: (cards: Note[]) => void,
   onDrawings: (drawings: Stroke[]) => void,
-  onJobs?: (jobs: Job[]) => void
+  onJobs?: (jobs: Job[]) => void,
+  onViewport?: (viewport: { x: number; y: number; zoom: number }) => void
 ) => {
   if (!db) return () => undefined;
 
@@ -120,6 +122,20 @@ export const subscribeCanvasRealtime = (
         const data = snapshot.data() as DocumentData | undefined;
         const jobs = normalizeJobs(data?.jobs);
         if (jobs.length) onJobs(jobs);
+        const viewport = data?.viewport;
+        if (
+          onViewport &&
+          viewport &&
+          Number.isFinite(Number(viewport.x)) &&
+          Number.isFinite(Number(viewport.y)) &&
+          Number.isFinite(Number(viewport.zoom))
+        ) {
+          onViewport({
+            x: Number(viewport.x),
+            y: Number(viewport.y),
+            zoom: Number(viewport.zoom),
+          });
+        }
       })
     : () => undefined;
 
@@ -130,19 +146,27 @@ export const subscribeCanvasRealtime = (
   };
 };
 
-export const upsertCanvasJobs = async (canvasId: string, jobs: Job[]) => {
+export const upsertCanvasJobs = async (
+  canvasId: string,
+  jobs: Job[],
+  viewport?: { x: number; y: number; zoom: number }
+) => {
   if (!db) return;
+  const payload: Record<string, unknown> = {
+    jobs: jobs.map((job) => ({
+      id: job.id,
+      legacyJobId: job.legacyJobId || job.id,
+      name: job.name,
+      companyName: job.name,
+      color: job.color,
+    })),
+    updatedAt: serverTimestamp(),
+  };
+  if (viewport) payload.viewport = viewport;
+
   await setDoc(
     canvasDoc(canvasId),
-    {
-      jobs: jobs.map((job) => ({
-        id: job.id,
-        name: job.name,
-        companyName: job.name,
-        color: job.color,
-      })),
-      updatedAt: serverTimestamp(),
-    },
+    payload,
     { merge: true }
   );
 };

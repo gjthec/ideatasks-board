@@ -25,6 +25,7 @@ export enum ToolType {
 export interface Job {
   id: string;
   name: string;
+  legacyJobId?: string;
   color: string; // Tailwind class like 'bg-blue-600'
 }
 

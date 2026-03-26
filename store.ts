@@ -64,6 +64,12 @@ const normalizeJobs = (jobsRaw: any): BoardState['jobs'] => {
       const rawName = job?.name ?? job?.companyName ?? job?.label;
       return {
         id: typeof job?.id === 'string' && job.id ? job.id : generateId(),
+        legacyJobId:
+          typeof job?.legacyJobId === 'string' && job.legacyJobId
+            ? job.legacyJobId
+            : typeof job?.id === 'string' && job.id
+              ? job.id
+              : undefined,
         name: typeof rawName === 'string' && rawName.trim() ? rawName.trim() : `Empresa ${index + 1}`,
         color: typeof job?.color === 'string' && job.color ? job.color : 'bg-blue-600',
       };
@@ -147,6 +153,33 @@ const migrateImportedJson = (data: any) => {
   };
 };
 
+const mapImportedJobsAndNotes = (existingJobs: BoardState['jobs'], importedJobs: BoardState['jobs'], notes: Note[]) => {
+  const mappedJobs = [...existingJobs];
+  const legacyToCurrent = new Map<string, string>();
+
+  importedJobs.forEach((job) => {
+    const legacyId = job.legacyJobId || job.id;
+    const existing = mappedJobs.find((j) => j.id === job.id || j.legacyJobId === legacyId);
+    if (existing) {
+      existing.name = job.name;
+      existing.color = job.color;
+      existing.legacyJobId = legacyId;
+      legacyToCurrent.set(legacyId, existing.id);
+      return;
+    }
+    mappedJobs.push({ ...job, legacyJobId: legacyId });
+    legacyToCurrent.set(legacyId, job.id);
+  });
+
+  const fallbackJobId = mappedJobs[0]?.id || DEFAULT_JOBS[0].id;
+  const mappedNotes = notes.map((note) => ({
+    ...note,
+    job: legacyToCurrent.get(note.job) || note.job || fallbackJobId,
+  }));
+
+  return { jobs: mappedJobs, notes: mappedNotes };
+};
+
 let syncUnsubscribe: (() => void) | null = null;
 let prefsUnsubscribe: (() => void) | null = null;
 let authUnsubscribe: (() => void) | null = null;
@@ -176,9 +209,9 @@ const scheduleBoardSync = () => {
 
     useBoardStore.setState({ isSyncing: true });
     try {
+      await upsertCanvasJobs(canvasId, state.jobs, state.viewport);
       await Promise.all(state.notes.map((note) => upsertCard(canvasId, note, user.uid)));
       await Promise.all(state.strokes.map((stroke) => upsertDrawing(canvasId, stroke, user.uid)));
-      await upsertCanvasJobs(canvasId, state.jobs);
 
       const localNoteIds = new Set(state.notes.map((n) => n.id));
       const localStrokeIds = new Set(state.strokes.map((st) => st.id));
@@ -326,6 +359,11 @@ export const useBoardStore = create<BoardState>()(
           (jobs) => {
             isApplyingRemoteState = true;
             setStore({ jobs: normalizeJobs(jobs) });
+            isApplyingRemoteState = false;
+          },
+          (viewport) => {
+            isApplyingRemoteState = true;
+            setStore({ viewport: normalizeViewport(viewport) });
             isApplyingRemoteState = false;
           }
         );
@@ -482,7 +520,10 @@ export const useBoardStore = create<BoardState>()(
       }),
 
     addJob: (name, color) => {
-      setStore((state) => ({ jobs: [...state.jobs, { id: generateId(), name, color }] }));
+      setStore((state) => {
+        const id = generateId();
+        return { jobs: [...state.jobs, { id, legacyJobId: id, name, color }] };
+      });
       scheduleBoardSync();
     },
     updateJobName: (id, name) => {
@@ -514,11 +555,12 @@ export const useBoardStore = create<BoardState>()(
     loadBoard: (data) => {
       const normalizedData = migrateImportedJson(data);
       if (!normalizedData) return false;
+      const mapped = mapImportedJobsAndNotes(get().jobs, normalizedData.jobs, normalizedData.notes);
       setStore({
-        notes: normalizedData.notes,
+        notes: mapped.notes,
         strokes: normalizedData.strokes,
         viewport: normalizedData.viewport,
-        jobs: normalizedData.jobs,
+        jobs: mapped.jobs,
         selectedNoteIds: [],
         clipboard: [],
       });
