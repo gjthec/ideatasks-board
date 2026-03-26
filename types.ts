@@ -121,7 +121,7 @@ export interface BoardState {
   clearBoard: () => void;
   
   setViewport: (viewport: Viewport) => void;
-  loadBoard: (data: { notes: Note[], strokes: Stroke[], viewport: Viewport, jobs?: Job[] }) => void;
+  loadBoard: (data: unknown) => boolean;
 
   // AI Actions
   generateBrainstorm: (noteId: string) => Promise<void>;
