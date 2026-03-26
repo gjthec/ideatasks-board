@@ -1,6 +1,7 @@
 import { db } from './firebaseConfig';
-import { Note, Stroke } from './types';
+import { Job, Note, Stroke } from './types';
 import {
+  DocumentData,
   collection,
   deleteDoc,
   doc,
@@ -68,11 +69,33 @@ export const getOrCreateUserCanvas = async (uid: string, email?: string | null) 
 
 const cardsCollection = (canvasId: string) => collection(db!, 'canvases', canvasId, 'cards');
 const drawingsCollection = (canvasId: string) => collection(db!, 'canvases', canvasId, 'drawings');
+const canvasDoc = (canvasId: string) => doc(db!, 'canvases', canvasId);
+
+const normalizeJobName = (job: any, fallbackIndex: number) => {
+  const name = job?.name ?? job?.companyName ?? job?.label;
+  return typeof name === 'string' && name.trim() ? name.trim() : `Empresa ${fallbackIndex + 1}`;
+};
+
+const normalizeJobs = (raw: unknown): Job[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((job: any, index: number) => {
+      const id = typeof job?.id === 'string' && job.id ? job.id : '';
+      if (!id) return null;
+      return {
+        id,
+        name: normalizeJobName(job, index),
+        color: typeof job?.color === 'string' && job.color ? job.color : 'bg-blue-600',
+      } as Job;
+    })
+    .filter((job): job is Job => Boolean(job));
+};
 
 export const subscribeCanvasRealtime = (
   canvasId: string,
   onCards: (cards: Note[]) => void,
-  onDrawings: (drawings: Stroke[]) => void
+  onDrawings: (drawings: Stroke[]) => void,
+  onJobs?: (jobs: Job[]) => void
 ) => {
   if (!db) return () => undefined;
 
@@ -92,10 +115,36 @@ export const subscribeCanvasRealtime = (
     onDrawings(drawings);
   });
 
+  const unsubCanvas = onJobs
+    ? onSnapshot(canvasDoc(canvasId), (snapshot) => {
+        const data = snapshot.data() as DocumentData | undefined;
+        const jobs = normalizeJobs(data?.jobs);
+        if (jobs.length) onJobs(jobs);
+      })
+    : () => undefined;
+
   return () => {
     unsubCards();
     unsubDrawings();
+    unsubCanvas();
   };
+};
+
+export const upsertCanvasJobs = async (canvasId: string, jobs: Job[]) => {
+  if (!db) return;
+  await setDoc(
+    canvasDoc(canvasId),
+    {
+      jobs: jobs.map((job) => ({
+        id: job.id,
+        name: job.name,
+        companyName: job.name,
+        color: job.color,
+      })),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 };
 
 export const upsertCard = async (canvasId: string, note: Note, uid: string) => {
@@ -156,9 +205,11 @@ export const migrateLocalDataToCanvas = async (uid: string, canvasId: string, st
     const parsed = JSON.parse(localData);
     const notes: Note[] = parsed.notes || [];
     const strokes: Stroke[] = parsed.strokes || [];
+    const jobs: Job[] = normalizeJobs(parsed.jobs);
 
     await Promise.all(notes.map((note) => upsertCard(canvasId, note, uid)));
     await Promise.all(strokes.map((stroke) => upsertDrawing(canvasId, stroke, uid)));
+    if (jobs.length) await upsertCanvasJobs(canvasId, jobs);
 
     localStorage.setItem(migratedFlag, 'true');
   } catch (error) {

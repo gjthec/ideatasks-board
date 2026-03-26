@@ -27,6 +27,7 @@ import {
   migrateLocalDataToCanvas,
   subscribeCanvasRealtime,
   upsertCard,
+  upsertCanvasJobs,
   upsertDrawing,
 } from './canvasService';
 
@@ -59,11 +60,14 @@ const normalizeViewport = (input: any): Viewport => {
 const normalizeJobs = (jobsRaw: any): BoardState['jobs'] => {
   if (!Array.isArray(jobsRaw)) return DEFAULT_JOBS;
   const jobs = jobsRaw
-    .map((job: any) => ({
-      id: typeof job?.id === 'string' && job.id ? job.id : generateId(),
-      name: typeof job?.name === 'string' && job.name ? job.name : 'Empresa',
-      color: typeof job?.color === 'string' && job.color ? job.color : 'bg-blue-600',
-    }))
+    .map((job: any, index: number) => {
+      const rawName = job?.name ?? job?.companyName ?? job?.label;
+      return {
+        id: typeof job?.id === 'string' && job.id ? job.id : generateId(),
+        name: typeof rawName === 'string' && rawName.trim() ? rawName.trim() : `Empresa ${index + 1}`,
+        color: typeof job?.color === 'string' && job.color ? job.color : 'bg-blue-600',
+      };
+    })
     .filter((job: any) => job.id);
   return jobs.length ? jobs : DEFAULT_JOBS;
 };
@@ -174,6 +178,7 @@ const scheduleBoardSync = () => {
     try {
       await Promise.all(state.notes.map((note) => upsertCard(canvasId, note, user.uid)));
       await Promise.all(state.strokes.map((stroke) => upsertDrawing(canvasId, stroke, user.uid)));
+      await upsertCanvasJobs(canvasId, state.jobs);
 
       const localNoteIds = new Set(state.notes.map((n) => n.id));
       const localStrokeIds = new Set(state.strokes.map((st) => st.id));
@@ -316,6 +321,11 @@ export const useBoardStore = create<BoardState>()(
               notes: useBoardStore.getState().notes,
               strokes: drawings,
             };
+            isApplyingRemoteState = false;
+          },
+          (jobs) => {
+            isApplyingRemoteState = true;
+            setStore({ jobs: normalizeJobs(jobs) });
             isApplyingRemoteState = false;
           }
         );
@@ -471,14 +481,21 @@ export const useBoardStore = create<BoardState>()(
         return { notes: state.notes.map((n) => (n.id === id ? { ...n, zIndex: maxZ + 1 } : n)) };
       }),
 
-    addJob: (name, color) => setStore((state) => ({ jobs: [...state.jobs, { id: generateId(), name, color }] })),
-    updateJobName: (id, name) =>
-      setStore((state) => ({ jobs: state.jobs.map((j) => (j.id === id ? { ...j, name } : j)) })),
-    deleteJob: (id) =>
+    addJob: (name, color) => {
+      setStore((state) => ({ jobs: [...state.jobs, { id: generateId(), name, color }] }));
+      scheduleBoardSync();
+    },
+    updateJobName: (id, name) => {
+      setStore((state) => ({ jobs: state.jobs.map((j) => (j.id === id ? { ...j, name } : j)) }));
+      scheduleBoardSync();
+    },
+    deleteJob: (id) => {
       setStore((state) => ({
         jobs: state.jobs.filter((j) => j.id !== id),
         notes: state.notes.map((n) => (n.job === id ? { ...n, job: state.jobs[0]?.id || 'default' } : n)),
-      })),
+      }));
+      scheduleBoardSync();
+    },
 
     addStroke: (stroke) => {
       setStore((state) => ({ strokes: [...state.strokes, stroke] }));
