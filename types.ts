@@ -25,6 +25,7 @@ export enum ToolType {
 export interface Job {
   id: string;
   name: string;
+  legacyJobId?: string;
   color: string; // Tailwind class like 'bg-blue-600'
 }
 
@@ -121,7 +122,7 @@ export interface BoardState {
   clearBoard: () => void;
   
   setViewport: (viewport: Viewport) => void;
-  loadBoard: (data: { notes: Note[], strokes: Stroke[], viewport: Viewport, jobs?: Job[] }) => void;
+  loadBoard: (data: unknown) => boolean;
 
   // AI Actions
   generateBrainstorm: (noteId: string) => Promise<void>;

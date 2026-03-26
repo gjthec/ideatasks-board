@@ -3,6 +3,7 @@ import { subscribeWithSelector } from 'zustand/middleware';
 import {
   BoardState,
   Note,
+  Point,
   Stroke,
   TaskStatus,
   ToolType,
@@ -26,6 +27,7 @@ import {
   migrateLocalDataToCanvas,
   subscribeCanvasRealtime,
   upsertCard,
+  upsertCanvasJobs,
   upsertDrawing,
 } from './canvasService';
 
@@ -33,6 +35,150 @@ const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
 const STORAGE_KEY = 'ideatasks-board-v1';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
+
+const isTaskStatus = (status: unknown): status is TaskStatus =>
+  status === TaskStatus.TODO || status === TaskStatus.DOING || status === TaskStatus.DONE;
+
+const NOTE_COLORS = new Set(['#fef3c7', '#dbeafe', '#dcfce7', '#fee2e2', '#f3e8ff', '#f3f4f6']);
+const normalizeNoteColor = (value: unknown): Note['color'] => {
+  if (typeof value !== 'string') return '#fef3c7' as Note['color'];
+  const normalized = value.trim().toLowerCase();
+  return (NOTE_COLORS.has(normalized) ? normalized : '#fef3c7') as Note['color'];
+};
+
+const normalizeViewport = (input: any): Viewport => {
+  const x = Number(input?.x);
+  const y = Number(input?.y);
+  const zoom = Number(input?.zoom);
+  return {
+    x: Number.isFinite(x) ? x : DEFAULT_VIEWPORT.x,
+    y: Number.isFinite(y) ? y : DEFAULT_VIEWPORT.y,
+    zoom: Number.isFinite(zoom) ? Math.max(0.1, Math.min(5, zoom)) : DEFAULT_VIEWPORT.zoom,
+  };
+};
+
+const normalizeJobs = (jobsRaw: any): BoardState['jobs'] => {
+  if (!Array.isArray(jobsRaw)) return DEFAULT_JOBS;
+  const jobs = jobsRaw
+    .map((job: any, index: number) => {
+      const rawName = job?.name ?? job?.companyName ?? job?.label;
+      return {
+        id: typeof job?.id === 'string' && job.id ? job.id : generateId(),
+        legacyJobId:
+          typeof job?.legacyJobId === 'string' && job.legacyJobId
+            ? job.legacyJobId
+            : typeof job?.id === 'string' && job.id
+              ? job.id
+              : undefined,
+        name: typeof rawName === 'string' && rawName.trim() ? rawName.trim() : `Empresa ${index + 1}`,
+        color: typeof job?.color === 'string' && job.color ? job.color : 'bg-blue-600',
+      };
+    })
+    .filter((job: any) => job.id);
+  return jobs.length ? jobs : DEFAULT_JOBS;
+};
+
+const migrateImportedJson = (data: any) => {
+  if (!data || typeof data !== 'object') return null;
+
+  const notesSource = Array.isArray(data.notes)
+    ? data.notes
+    : Array.isArray(data.cards)
+      ? data.cards
+      : [];
+  const strokesSource = Array.isArray(data.strokes)
+    ? data.strokes
+    : Array.isArray(data.drawings)
+      ? data.drawings
+      : [];
+  const jobs = normalizeJobs(data.jobs);
+  const fallbackJobId = jobs[0]?.id || DEFAULT_JOBS[0].id;
+
+  const notes: Note[] = notesSource
+    .filter((note: any) => note && typeof note === 'object')
+    .map((note: any, index: number) => {
+      const x = Number(note.x ?? note.position?.x ?? note.posX);
+      const y = Number(note.y ?? note.position?.y ?? note.posY);
+      const width = Number(note.width ?? note.size?.width ?? note.w);
+      const height = Number(note.height ?? note.size?.height ?? note.h);
+      const status = note.status ?? note.taskStatus;
+      return {
+        id: typeof note.id === 'string' && note.id ? note.id : generateId(),
+        x: Number.isFinite(x) ? x : 0,
+        y: Number.isFinite(y) ? y : 0,
+        width: Number.isFinite(width) ? Math.max(150, width) : 200,
+        height: Number.isFinite(height) ? Math.max(100, height) : 180,
+        content: typeof note.content === 'string' ? note.content : typeof note.text === 'string' ? note.text : '',
+        color: normalizeNoteColor(note.color),
+        isTask: typeof note.isTask === 'boolean' ? note.isTask : Boolean(note.task),
+        status: isTaskStatus(status) ? status : TaskStatus.TODO,
+        priority: note.priority === 'low' || note.priority === 'high' ? note.priority : 'medium',
+        job: typeof note.job === 'string' && note.job ? note.job : fallbackJobId,
+        zIndex: Number.isFinite(Number(note.zIndex)) ? Number(note.zIndex) : index + 1,
+      };
+    });
+
+  const strokes: Stroke[] = strokesSource
+    .filter((stroke: any) => stroke && typeof stroke === 'object')
+    .map((stroke: any) => {
+      const pointsSource = Array.isArray(stroke.points)
+        ? stroke.points
+        : Array.isArray(stroke.path)
+          ? stroke.path
+          : [];
+      const points = pointsSource
+        .map((p: any) => ({
+          x: Number(p?.x),
+          y: Number(p?.y),
+        }))
+        .filter((p: Point) => Number.isFinite(p.x) && Number.isFinite(p.y));
+      return {
+        id: typeof stroke.id === 'string' && stroke.id ? stroke.id : generateId(),
+        points,
+        color: typeof stroke.color === 'string' && stroke.color ? stroke.color : '#000000',
+        size: Number.isFinite(Number(stroke.size)) ? Math.max(1, Number(stroke.size)) : 3,
+      };
+    })
+    .filter((stroke: Stroke) => stroke.points.length > 0);
+
+  if (!Array.isArray(data.notes) && !Array.isArray(data.cards) && !Array.isArray(data.strokes) && !Array.isArray(data.drawings)) {
+    return null;
+  }
+
+  return {
+    notes,
+    strokes,
+    viewport: normalizeViewport(data.viewport),
+    jobs,
+  };
+};
+
+const mapImportedJobsAndNotes = (existingJobs: BoardState['jobs'], importedJobs: BoardState['jobs'], notes: Note[]) => {
+  const mappedJobs = [...existingJobs];
+  const legacyToCurrent = new Map<string, string>();
+
+  importedJobs.forEach((job) => {
+    const legacyId = job.legacyJobId || job.id;
+    const existing = mappedJobs.find((j) => j.id === job.id || j.legacyJobId === legacyId);
+    if (existing) {
+      existing.name = job.name;
+      existing.color = job.color;
+      existing.legacyJobId = legacyId;
+      legacyToCurrent.set(legacyId, existing.id);
+      return;
+    }
+    mappedJobs.push({ ...job, legacyJobId: legacyId });
+    legacyToCurrent.set(legacyId, job.id);
+  });
+
+  const fallbackJobId = mappedJobs[0]?.id || DEFAULT_JOBS[0].id;
+  const mappedNotes = notes.map((note) => ({
+    ...note,
+    job: legacyToCurrent.get(note.job) || note.job || fallbackJobId,
+  }));
+
+  return { jobs: mappedJobs, notes: mappedNotes };
+};
 
 let syncUnsubscribe: (() => void) | null = null;
 let prefsUnsubscribe: (() => void) | null = null;
@@ -63,6 +209,7 @@ const scheduleBoardSync = () => {
 
     useBoardStore.setState({ isSyncing: true });
     try {
+      await upsertCanvasJobs(canvasId, state.jobs, state.viewport);
       await Promise.all(state.notes.map((note) => upsertCard(canvasId, note, user.uid)));
       await Promise.all(state.strokes.map((stroke) => upsertDrawing(canvasId, stroke, user.uid)));
 
@@ -207,6 +354,16 @@ export const useBoardStore = create<BoardState>()(
               notes: useBoardStore.getState().notes,
               strokes: drawings,
             };
+            isApplyingRemoteState = false;
+          },
+          (jobs) => {
+            isApplyingRemoteState = true;
+            setStore({ jobs: normalizeJobs(jobs) });
+            isApplyingRemoteState = false;
+          },
+          (viewport) => {
+            isApplyingRemoteState = true;
+            setStore({ viewport: normalizeViewport(viewport) });
             isApplyingRemoteState = false;
           }
         );
@@ -362,14 +519,24 @@ export const useBoardStore = create<BoardState>()(
         return { notes: state.notes.map((n) => (n.id === id ? { ...n, zIndex: maxZ + 1 } : n)) };
       }),
 
-    addJob: (name, color) => setStore((state) => ({ jobs: [...state.jobs, { id: generateId(), name, color }] })),
-    updateJobName: (id, name) =>
-      setStore((state) => ({ jobs: state.jobs.map((j) => (j.id === id ? { ...j, name } : j)) })),
-    deleteJob: (id) =>
+    addJob: (name, color) => {
+      setStore((state) => {
+        const id = generateId();
+        return { jobs: [...state.jobs, { id, legacyJobId: id, name, color }] };
+      });
+      scheduleBoardSync();
+    },
+    updateJobName: (id, name) => {
+      setStore((state) => ({ jobs: state.jobs.map((j) => (j.id === id ? { ...j, name } : j)) }));
+      scheduleBoardSync();
+    },
+    deleteJob: (id) => {
       setStore((state) => ({
         jobs: state.jobs.filter((j) => j.id !== id),
         notes: state.notes.map((n) => (n.job === id ? { ...n, job: state.jobs[0]?.id || 'default' } : n)),
-      })),
+      }));
+      scheduleBoardSync();
+    },
 
     addStroke: (stroke) => {
       setStore((state) => ({ strokes: [...state.strokes, stroke] }));
@@ -386,13 +553,19 @@ export const useBoardStore = create<BoardState>()(
     },
     setViewport: (viewport) => setStore({ viewport }),
     loadBoard: (data) => {
+      const normalizedData = migrateImportedJson(data);
+      if (!normalizedData) return false;
+      const mapped = mapImportedJobsAndNotes(get().jobs, normalizedData.jobs, normalizedData.notes);
       setStore({
-        notes: data.notes || [],
-        strokes: data.strokes || [],
-        viewport: data.viewport || DEFAULT_VIEWPORT,
-        jobs: data.jobs || DEFAULT_JOBS,
+        notes: mapped.notes,
+        strokes: normalizedData.strokes,
+        viewport: normalizedData.viewport,
+        jobs: mapped.jobs,
+        selectedNoteIds: [],
+        clipboard: [],
       });
       scheduleBoardSync();
+      return true;
     },
 
     generateBrainstorm: async (noteId) => {
@@ -451,4 +624,3 @@ useBoardStore.subscribe(
     }, 1000);
   }
 );
-

@@ -90,9 +90,8 @@ export const Toolbar: React.FC = () => {
     reader.onload = (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-        if (json.notes && json.strokes) {
-          loadBoard(json);
-        } else {
+        const imported = loadBoard(json);
+        if (!imported) {
           alert('Invalid file format');
         }
       } catch (err) {

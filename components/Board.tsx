@@ -89,8 +89,8 @@ export const Board: React.FC = () => {
   }, [selectedNoteIds, deleteNote, duplicateNote, copySelection, pasteClipboard]);
 
   // Handle Wheel Zoom and Pan
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
+  const handleWheel = (e: WheelEvent) => {
+    if (e.cancelable) e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
       // Zoom
       const zoomFactor = -e.deltaY * 0.001;
@@ -118,6 +118,15 @@ export const Board: React.FC = () => {
       });
     }
   };
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+    };
+  }, [handleWheel]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!containerRef.current) return;
@@ -376,7 +385,6 @@ export const Board: React.FC = () => {
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerUp} 
         onPointerCancel={handlePointerUp}
-        onWheel={handleWheel}
         onContextMenu={(e) => e.preventDefault()}
     >
         {/* Infinite Grid Background */}
