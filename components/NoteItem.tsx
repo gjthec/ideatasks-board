@@ -4,7 +4,6 @@ import { useBoardStore } from '../store';
 import { Note, NoteColor, TaskStatus, ToolType, DEFAULT_JOBS } from '../types';
 import { Trash2, Copy, CheckSquare, Sparkles, Loader2 } from 'lucide-react';
 import { getNoteColorFromJobColor } from '../utils';
-import { shallow } from 'zustand/shallow';
 
 interface NoteItemProps {
   noteId: string;
@@ -33,20 +32,14 @@ const BG_MAP: Record<NoteColor, string> = {
 
 const NoteItemComponent: React.FC<NoteItemProps> = ({ noteId, onMouseDown }) => {
   const note = useBoardStore((state) => state.notes.find((item) => item.id === noteId));
-  const { updateNote, deleteNote, duplicateNote, tool, bringToFront, jobs, generateBrainstorm, isGeneratingAI } =
-    useBoardStore(
-      (state) => ({
-        updateNote: state.updateNote,
-        deleteNote: state.deleteNote,
-        duplicateNote: state.duplicateNote,
-        tool: state.tool,
-        bringToFront: state.bringToFront,
-        jobs: state.jobs,
-        generateBrainstorm: state.generateBrainstorm,
-        isGeneratingAI: state.isGeneratingAI,
-      }),
-      shallow
-    );
+  const updateNote = useBoardStore((state) => state.updateNote);
+  const deleteNote = useBoardStore((state) => state.deleteNote);
+  const duplicateNote = useBoardStore((state) => state.duplicateNote);
+  const tool = useBoardStore((state) => state.tool);
+  const bringToFront = useBoardStore((state) => state.bringToFront);
+  const jobs = useBoardStore((state) => state.jobs);
+  const generateBrainstorm = useBoardStore((state) => state.generateBrainstorm);
+  const isGeneratingAI = useBoardStore((state) => state.isGeneratingAI);
   const isSelected = useBoardStore((state) => state.selectedNoteIds.includes(noteId));
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const [isEditing, setIsEditing] = useState(false);

@@ -3,7 +3,6 @@ import { useBoardStore } from '../store';
 import { screenToWorld, getSvgPathFromStroke, generateId } from '../utils';
 import { NoteItem } from './NoteItem';
 import { ToolType, Point } from '../types';
-import { shallow } from 'zustand/shallow';
 
 
 // Converte apenas traços muito escuros para branco durante a renderização no modo escuro.
@@ -29,45 +28,24 @@ const getMidpoint = (p1: Point, p2: Point) => {
 
 export const Board: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const {
-    viewport,
-    setViewport,
-    strokes,
-    tool,
-    addStroke,
-    deleteStroke,
-    selectNote,
-    selectedNoteIds,
-    updateNote,
-    deleteNote,
-    duplicateNote,
-    copySelection,
-    pasteClipboard,
-    penColor,
-    penSize,
-    isDarkMode,
-  } = useBoardStore(
-    (state) => ({
-      viewport: state.viewport,
-      setViewport: state.setViewport,
-      strokes: state.strokes,
-      tool: state.tool,
-      addStroke: state.addStroke,
-      deleteStroke: state.deleteStroke,
-      selectNote: state.selectNote,
-      selectedNoteIds: state.selectedNoteIds,
-      updateNote: state.updateNote,
-      deleteNote: state.deleteNote,
-      duplicateNote: state.duplicateNote,
-      copySelection: state.copySelection,
-      pasteClipboard: state.pasteClipboard,
-      penColor: state.penColor,
-      penSize: state.penSize,
-      isDarkMode: state.isDarkMode,
-    }),
-    shallow
-  );
-  const noteIds = useBoardStore((state) => state.notes.map((note) => note.id), shallow);
+  const viewport = useBoardStore((state) => state.viewport);
+  const setViewport = useBoardStore((state) => state.setViewport);
+  const notes = useBoardStore((state) => state.notes);
+  const strokes = useBoardStore((state) => state.strokes);
+  const tool = useBoardStore((state) => state.tool);
+  const addStroke = useBoardStore((state) => state.addStroke);
+  const deleteStroke = useBoardStore((state) => state.deleteStroke);
+  const selectNote = useBoardStore((state) => state.selectNote);
+  const selectedNoteIds = useBoardStore((state) => state.selectedNoteIds);
+  const updateNote = useBoardStore((state) => state.updateNote);
+  const deleteNote = useBoardStore((state) => state.deleteNote);
+  const duplicateNote = useBoardStore((state) => state.duplicateNote);
+  const copySelection = useBoardStore((state) => state.copySelection);
+  const pasteClipboard = useBoardStore((state) => state.pasteClipboard);
+  const penColor = useBoardStore((state) => state.penColor);
+  const penSize = useBoardStore((state) => state.penSize);
+  const isDarkMode = useBoardStore((state) => state.isDarkMode);
+  const noteIds = notes.map((note) => note.id);
 
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
