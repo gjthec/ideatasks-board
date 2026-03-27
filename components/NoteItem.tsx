@@ -6,8 +6,8 @@ import { Trash2, Copy, CheckSquare, Sparkles, Loader2 } from 'lucide-react';
 import { getNoteColorFromJobColor } from '../utils';
 
 interface NoteItemProps {
-  note: Note;
-  onMouseDown: (e: React.PointerEvent) => void;
+  noteId: string;
+  onMouseDown: (noteId: string, e: React.PointerEvent) => void;
 }
 
 // Map specifically for border colors
@@ -30,16 +30,21 @@ const BG_MAP: Record<NoteColor, string> = {
   [NoteColor.GRAY]: 'bg-gray-100 dark:bg-gray-800',
 };
 
-export const NoteItem: React.FC<NoteItemProps> = ({ note, onMouseDown }) => {
-  const { 
-    updateNote, deleteNote, duplicateNote, 
-    selectedNoteIds, tool, bringToFront,
-    jobs, generateBrainstorm, isGeneratingAI
-  } = useBoardStore();
-  
-  const isSelected = selectedNoteIds.includes(note.id);
+const NoteItemComponent: React.FC<NoteItemProps> = ({ noteId, onMouseDown }) => {
+  const note = useBoardStore((state) => state.notes.find((item) => item.id === noteId));
+  const updateNote = useBoardStore((state) => state.updateNote);
+  const deleteNote = useBoardStore((state) => state.deleteNote);
+  const duplicateNote = useBoardStore((state) => state.duplicateNote);
+  const tool = useBoardStore((state) => state.tool);
+  const bringToFront = useBoardStore((state) => state.bringToFront);
+  const jobs = useBoardStore((state) => state.jobs);
+  const generateBrainstorm = useBoardStore((state) => state.generateBrainstorm);
+  const isGeneratingAI = useBoardStore((state) => state.isGeneratingAI);
+  const isSelected = useBoardStore((state) => state.selectedNoteIds.includes(noteId));
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const [isEditing, setIsEditing] = useState(false);
+
+  if (!note) return null;
 
   // Prevent drag when interacting with controls
   const stopPropagation = (e: React.PointerEvent | React.MouseEvent | React.ChangeEvent) => {
@@ -100,7 +105,7 @@ export const NoteItem: React.FC<NoteItemProps> = ({ note, onMouseDown }) => {
       }}
       onPointerDown={(e) => {
         bringToFront(note.id);
-        onMouseDown(e);
+        onMouseDown(note.id, e);
       }}
       onDoubleClick={() => setIsEditing(true)}
     >
@@ -241,3 +246,5 @@ export const NoteItem: React.FC<NoteItemProps> = ({ note, onMouseDown }) => {
     </div>
   );
 };
+
+export const NoteItem = React.memo(NoteItemComponent);
