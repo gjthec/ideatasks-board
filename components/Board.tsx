@@ -1,8 +1,9 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { useBoardStore } from '../store';
 import { screenToWorld, getSvgPathFromStroke, generateId } from '../utils';
 import { NoteItem } from './NoteItem';
 import { ToolType, Point } from '../types';
+import { shallow } from 'zustand/shallow';
 
 
 // Converte apenas traços muito escuros para branco durante a renderização no modo escuro.
@@ -28,17 +29,50 @@ const getMidpoint = (p1: Point, p2: Point) => {
 
 export const Board: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { 
-    viewport, setViewport, 
-    notes, strokes, 
-    tool, addStroke, deleteStroke,
-    selectNote, selectedNoteIds, updateNote, deleteNote, duplicateNote,
-    copySelection, pasteClipboard,
-    penColor, penSize, isDarkMode 
-  } = useBoardStore();
+  const {
+    viewport,
+    setViewport,
+    strokes,
+    tool,
+    addStroke,
+    deleteStroke,
+    selectNote,
+    selectedNoteIds,
+    updateNote,
+    deleteNote,
+    duplicateNote,
+    copySelection,
+    pasteClipboard,
+    penColor,
+    penSize,
+    isDarkMode,
+  } = useBoardStore(
+    (state) => ({
+      viewport: state.viewport,
+      setViewport: state.setViewport,
+      strokes: state.strokes,
+      tool: state.tool,
+      addStroke: state.addStroke,
+      deleteStroke: state.deleteStroke,
+      selectNote: state.selectNote,
+      selectedNoteIds: state.selectedNoteIds,
+      updateNote: state.updateNote,
+      deleteNote: state.deleteNote,
+      duplicateNote: state.duplicateNote,
+      copySelection: state.copySelection,
+      pasteClipboard: state.pasteClipboard,
+      penColor: state.penColor,
+      penSize: state.penSize,
+      isDarkMode: state.isDarkMode,
+    }),
+    shallow
+  );
+  const noteIds = useBoardStore((state) => state.notes.map((note) => note.id), shallow);
 
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const viewportRafRef = useRef<number | null>(null);
+  const pendingViewportRef = useRef(viewport);
   
   // Track active pointers for multi-touch gestures
   const activePointers = useRef<Map<number, Point>>(new Map());
@@ -61,6 +95,18 @@ export const Board: React.FC = () => {
   }>({ mode: 'idle', startX: 0, startY: 0 });
 
   const [dragMode, setDragMode] = useState<'pan' | 'drag-note' | 'draw' | 'idle' | 'gesture'>('idle');
+
+  const scheduleViewportUpdate = useCallback(
+    (nextViewport: typeof viewport) => {
+      pendingViewportRef.current = nextViewport;
+      if (viewportRafRef.current !== null) return;
+      viewportRafRef.current = requestAnimationFrame(() => {
+        viewportRafRef.current = null;
+        setViewport(pendingViewportRef.current);
+      });
+    },
+    [setViewport]
+  );
 
   // Handle Keyboard Shortcuts
   useEffect(() => {
@@ -89,7 +135,7 @@ export const Board: React.FC = () => {
   }, [selectedNoteIds, deleteNote, duplicateNote, copySelection, pasteClipboard]);
 
   // Handle Wheel Zoom and Pan
-  const handleWheel = (e: WheelEvent) => {
+  const handleWheel = useCallback((e: WheelEvent) => {
     if (e.cancelable) e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
       // Zoom
@@ -104,20 +150,20 @@ export const Board: React.FC = () => {
       const worldX = (mouseX - viewport.x) / viewport.zoom;
       const worldY = (mouseY - viewport.y) / viewport.zoom;
       
-      setViewport({
+      scheduleViewportUpdate({
         x: mouseX - worldX * newZoom,
         y: mouseY - worldY * newZoom,
         zoom: newZoom
       });
     } else {
       // Pan
-      setViewport({
+      scheduleViewportUpdate({
         ...viewport,
         x: viewport.x - e.deltaX,
         y: viewport.y - e.deltaY
       });
     }
-  };
+  }, [viewport, scheduleViewportUpdate]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -191,7 +237,7 @@ export const Board: React.FC = () => {
     }
   };
 
-  const handleNoteMouseDown = (e: React.PointerEvent, noteId: string) => {
+  const handleNoteMouseDown = useCallback((e: React.PointerEvent, noteId: string) => {
     if (tool === ToolType.PEN || tool === ToolType.ERASER || tool === ToolType.HAND || isSpacePressed) return;
     
     // If multiple fingers are down, we ignore note dragging to allow zooming/panning
@@ -201,7 +247,7 @@ export const Board: React.FC = () => {
     containerRef.current?.setPointerCapture(e.pointerId);
     activePointers.current.set(e.pointerId, {x: e.clientX, y: e.clientY});
 
-    const note = notes.find(n => n.id === noteId);
+    const note = useBoardStore.getState().notes.find((n) => n.id === noteId);
     if (!note) return;
 
     if (!e.shiftKey) selectNote(noteId);
@@ -215,7 +261,7 @@ export const Board: React.FC = () => {
       initialNotePos: { x: note.x, y: note.y }
     };
     setDragMode('drag-note');
-  };
+  }, [tool, isSpacePressed, selectNote]);
 
   const handlePointerMove = (e: React.PointerEvent) => {
     // Update pointer position in map
@@ -272,7 +318,7 @@ export const Board: React.FC = () => {
         const panDeltaX = currentMid.x - initialMid.x;
         const panDeltaY = currentMid.y - initialMid.y;
         
-        setViewport({
+        scheduleViewportUpdate({
             x: zoomX + panDeltaX,
             y: zoomY + panDeltaY,
             zoom: newZoom
@@ -290,7 +336,7 @@ export const Board: React.FC = () => {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       if (initialViewport) {
-        setViewport({
+        scheduleViewportUpdate({
           ...viewport,
           x: initialViewport.x + dx,
           y: initialViewport.y + dy
@@ -359,12 +405,12 @@ export const Board: React.FC = () => {
   };
 
   // Eraser Logic
-  const handleStrokeClick = (e: React.PointerEvent, strokeId: string) => {
+  const handleStrokeClick = useCallback((e: React.PointerEvent, strokeId: string) => {
       if (tool === ToolType.ERASER) {
           e.stopPropagation();
           deleteStroke(strokeId);
       }
-  };
+  }, [tool, deleteStroke]);
 
   const getCursor = () => {
     if (isSpacePressed || tool === ToolType.HAND || dragMode === 'pan' || dragMode === 'gesture') return 'cursor-grab active:cursor-grabbing';
@@ -375,6 +421,21 @@ export const Board: React.FC = () => {
 
   const backgroundSize = 20 * viewport.zoom;
   const backgroundPosition = `${viewport.x}px ${viewport.y}px`;
+
+  useEffect(() => {
+    return () => {
+      if (viewportRafRef.current !== null) {
+        cancelAnimationFrame(viewportRafRef.current);
+      }
+    };
+  }, []);
+
+  const handleNotePointerDown = useCallback(
+    (noteId: string, e: React.PointerEvent) => {
+      handleNoteMouseDown(e, noteId);
+    },
+    [handleNoteMouseDown]
+  );
 
   return (
     <div 
@@ -404,11 +465,11 @@ export const Board: React.FC = () => {
                 transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`
             }}
         >
-            {notes.map(note => (
+            {noteIds.map((noteId) => (
                 <NoteItem 
-                    key={note.id} 
-                    note={note} 
-                    onMouseDown={(e) => handleNoteMouseDown(e, note.id)} 
+                    key={noteId}
+                    noteId={noteId}
+                    onMouseDown={handleNotePointerDown}
                 />
             ))}
             <svg className="absolute top-0 left-0 overflow-visible w-full h-full pointer-events-none z-[9999]">
