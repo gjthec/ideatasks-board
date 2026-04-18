@@ -48,6 +48,9 @@ export const Board: React.FC = () => {
   const noteIds = notes.map((note) => note.id);
 
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
+  const [eraseSelectionStart, setEraseSelectionStart] = useState<Point | null>(null);
+  const [eraseSelectionEnd, setEraseSelectionEnd] = useState<Point | null>(null);
+  const [selectedStrokeIds, setSelectedStrokeIds] = useState<Set<string>>(new Set());
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const viewportRafRef = useRef<number | null>(null);
   const pendingViewportRef = useRef(viewport);
@@ -64,7 +67,7 @@ export const Board: React.FC = () => {
 
   // Ref-based drag state for instant performance
   const dragInfoRef = useRef<{
-    mode: 'pan' | 'drag-note' | 'draw' | 'idle' | 'gesture';
+    mode: 'pan' | 'drag-note' | 'draw' | 'idle' | 'gesture' | 'erase-select';
     startX: number;
     startY: number;
     initialViewport?: { x: number; y: number };
@@ -72,7 +75,13 @@ export const Board: React.FC = () => {
     initialNotePos?: { x: number; y: number };
   }>({ mode: 'idle', startX: 0, startY: 0 });
 
-  const [dragMode, setDragMode] = useState<'pan' | 'drag-note' | 'draw' | 'idle' | 'gesture'>('idle');
+  const [dragMode, setDragMode] = useState<'pan' | 'drag-note' | 'draw' | 'idle' | 'gesture' | 'erase-select'>('idle');
+
+  const deleteSelectedStrokes = useCallback(() => {
+    if (selectedStrokeIds.size === 0) return;
+    selectedStrokeIds.forEach((id) => deleteStroke(id));
+    setSelectedStrokeIds(new Set());
+  }, [deleteStroke, selectedStrokeIds]);
 
   const scheduleViewportUpdate = useCallback(
     (nextViewport: typeof viewport) => {
@@ -93,7 +102,14 @@ export const Board: React.FC = () => {
           return;
       }
       if (e.code === 'Space' && !e.repeat) setIsSpacePressed(true);
-      if (e.key === 'Delete' || e.key === 'Backspace') selectedNoteIds.forEach(id => deleteNote(id));
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedStrokeIds.size > 0) {
+          e.preventDefault();
+          deleteSelectedStrokes();
+          return;
+        }
+        selectedNoteIds.forEach(id => deleteNote(id));
+      }
 
       if (e.ctrlKey || e.metaKey) {
           if (e.key === 'd') { e.preventDefault(); selectedNoteIds.forEach(id => duplicateNote(id)); }
@@ -110,7 +126,15 @@ export const Board: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [selectedNoteIds, deleteNote, duplicateNote, copySelection, pasteClipboard]);
+  }, [selectedNoteIds, selectedStrokeIds, deleteNote, duplicateNote, copySelection, pasteClipboard, deleteSelectedStrokes]);
+
+  useEffect(() => {
+    if (tool !== ToolType.ERASER) {
+      setSelectedStrokeIds(new Set());
+      setEraseSelectionStart(null);
+      setEraseSelectionEnd(null);
+    }
+  }, [tool]);
 
   // Handle Wheel Zoom and Pan
   const handleWheel = useCallback((e: WheelEvent) => {
@@ -210,6 +234,12 @@ export const Board: React.FC = () => {
       setCurrentStroke([worldPos]);
       setDragMode('draw');
       selectNote(null);
+    } else if (tool === ToolType.ERASER && isPrimaryButton) {
+      e.preventDefault();
+      dragInfoRef.current = { mode: 'erase-select', startX: x, startY: y };
+      setDragMode('erase-select');
+      setEraseSelectionStart(worldPos);
+      setEraseSelectionEnd(worldPos);
     } else if (tool === ToolType.SELECT && isPrimaryButton) {
         selectNote(null);
     }
@@ -338,6 +368,13 @@ export const Board: React.FC = () => {
             y: e.clientY - rect.top
         }, viewport);
         setCurrentStroke(prev => [...prev, worldPos]);
+    } else if (mode === 'erase-select') {
+      const rect = containerRef.current!.getBoundingClientRect();
+      const worldPos = screenToWorld({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      }, viewport);
+      setEraseSelectionEnd(worldPos);
     }
   };
 
@@ -372,6 +409,35 @@ export const Board: React.FC = () => {
       });
       setCurrentStroke([]);
     }
+
+    if (mode === 'erase-select' && eraseSelectionStart && eraseSelectionEnd) {
+      const minX = Math.min(eraseSelectionStart.x, eraseSelectionEnd.x);
+      const maxX = Math.max(eraseSelectionStart.x, eraseSelectionEnd.x);
+      const minY = Math.min(eraseSelectionStart.y, eraseSelectionEnd.y);
+      const maxY = Math.max(eraseSelectionStart.y, eraseSelectionEnd.y);
+      const minSelectionSize = 4 / viewport.zoom;
+      const isClickSelection = Math.abs(maxX - minX) < minSelectionSize && Math.abs(maxY - minY) < minSelectionSize;
+
+      if (!isClickSelection) {
+        const hits = strokes
+          .filter((stroke) =>
+            stroke.points.some((point) => point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY)
+          )
+          .map((stroke) => stroke.id);
+
+        setSelectedStrokeIds((prev) => {
+          if (!e.shiftKey) return new Set(hits);
+          const next = new Set(prev);
+          hits.forEach((id) => {
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+          });
+          return next;
+        });
+      }
+      setEraseSelectionStart(null);
+      setEraseSelectionEnd(null);
+    }
     
     if (activePointers.current.size === 0) {
         dragInfoRef.current = { mode: 'idle', startX: 0, startY: 0 };
@@ -386,14 +452,23 @@ export const Board: React.FC = () => {
   const handleStrokeClick = useCallback((e: React.PointerEvent, strokeId: string) => {
       if (tool === ToolType.ERASER) {
           e.stopPropagation();
-          deleteStroke(strokeId);
+          setSelectedStrokeIds((prev) => {
+            const next = new Set(prev);
+            if (e.shiftKey) {
+              if (next.has(strokeId)) next.delete(strokeId);
+              else next.add(strokeId);
+              return next;
+            }
+            if (next.has(strokeId) && next.size === 1) return new Set();
+            return new Set([strokeId]);
+          });
       }
-  }, [tool, deleteStroke]);
+  }, [tool]);
 
   const getCursor = () => {
     if (isSpacePressed || tool === ToolType.HAND || dragMode === 'pan' || dragMode === 'gesture') return 'cursor-grab active:cursor-grabbing';
     if (tool === ToolType.PEN) return 'cursor-crosshair';
-    if (tool === ToolType.ERASER) return 'cursor-cell';
+    if (tool === ToolType.ERASER) return 'cursor-crosshair';
     return 'cursor-default';
   };
 
@@ -460,7 +535,7 @@ export const Board: React.FC = () => {
                         strokeWidth={stroke.size}
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        className={`transition-opacity ${tool === ToolType.ERASER ? 'pointer-events-auto hover:opacity-30 cursor-pointer' : 'pointer-events-none'}`}
+                        className={`transition-opacity ${tool === ToolType.ERASER ? 'pointer-events-auto cursor-pointer' : 'pointer-events-none'} ${selectedStrokeIds.has(stroke.id) ? 'opacity-40' : 'opacity-100'}`}
                         onPointerDown={(e) => handleStrokeClick(e, stroke.id)}
                      />
                  ))}
@@ -475,8 +550,32 @@ export const Board: React.FC = () => {
                         className="opacity-70 pointer-events-none"
                      />
                  )}
+                 {eraseSelectionStart && eraseSelectionEnd && (
+                    <rect
+                      x={Math.min(eraseSelectionStart.x, eraseSelectionEnd.x)}
+                      y={Math.min(eraseSelectionStart.y, eraseSelectionEnd.y)}
+                      width={Math.abs(eraseSelectionStart.x - eraseSelectionEnd.x)}
+                      height={Math.abs(eraseSelectionStart.y - eraseSelectionEnd.y)}
+                      fill="rgba(59, 130, 246, 0.15)"
+                      stroke="rgba(59, 130, 246, 0.95)"
+                      strokeWidth={1 / viewport.zoom}
+                      strokeDasharray={`${4 / viewport.zoom},${4 / viewport.zoom}`}
+                      className="pointer-events-none"
+                    />
+                 )}
             </svg>
         </div>
+
+        {tool === ToolType.ERASER && selectedStrokeIds.size > 0 && (
+          <div className="absolute bottom-4 left-4 z-50">
+            <button
+              onClick={deleteSelectedStrokes}
+              className="px-3 py-2 rounded-lg bg-red-600 text-white text-sm font-medium shadow-lg hover:bg-red-500"
+            >
+              Delete selected ({selectedStrokeIds.size})
+            </button>
+          </div>
+        )}
         
         <div className="hidden md:block absolute bottom-4 right-4 text-xs text-gray-400 pointer-events-none select-none z-50">
             Hold Space + Drag to Pan • Ctrl + Scroll to Zoom
