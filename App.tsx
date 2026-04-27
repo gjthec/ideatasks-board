@@ -3,6 +3,7 @@ import { Board } from './components/Board';
 import { Toolbar } from './components/Toolbar';
 import { TaskDashboard } from './components/TaskDashboard';
 import { LoginPanel } from './components/LoginPanel';
+import { CollectionCloneButton } from './components/CollectionCloneButton';
 import { useBoardStore } from './store';
 
 const App: React.FC = () => {
@@ -20,6 +21,7 @@ const App: React.FC = () => {
         <Board />
       </div>
       <TaskDashboard />
+      <CollectionCloneButton />
       {isAuthReady && !currentUser && <LoginPanel />}
     </div>
   );
